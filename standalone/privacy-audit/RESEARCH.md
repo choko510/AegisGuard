@@ -104,7 +104,7 @@ OWASPは認証情報、セッショントークン、個人情報、暗号鍵な
 - `serde_json = 1.0.154`：公式 https://github.com/serde-rs/json 、MIT OR Apache-2.0。
 - Rust標準ライブラリ・既存AegisGuard本体コードのコピーはなく、本体依存はゼロ。
 - `Cargo.lock` のパッケージとチェックサムは2026-11-06時点のAegisGuardメインのロックから固定版と依存閉包を抜き出して作成。**Cargo生成・再解決は未実施**。不要なoptional依存が含まれる可能性があり、Cargoによる `--locked` 検証を残す。
-- AegisGuardのmain直下には確認時点で `LICENSE`/`LICENSE-MIT`/`LICENSE-APACHE` が存在しない。今回の独立パッケージのメタデータと、リポジトリ全体の配布条件の整合性をマージ前に所有者が確認する必要がある。
+- AegisGuardのmain直下には確認時点で `LICENSE`/`LICENSE-MIT`/`LICENSE-APACHE` が存在しない。そのため本パッケージは `publish = false` とし、独自のライセンス指定は保留。依存クレートのライセンスとは別に、リポジトリ全体の配布条件を所有者がマージ前に確認する必要がある。
 - 外部GPL/AGPLソースコード・独自ルールは複製していない。第三者コードの詳細ライセンス監査・脆弱性DB照合は `cargo-deny` 等が使える環境で再確認する。
 
 ## 6. テスト計画/実施状況

@@ -7,6 +7,7 @@ mod fim;
 #[cfg(windows)]
 mod fimwatch;
 mod fsafe;
+mod ioc;
 mod jsonl;
 mod model;
 mod pe;
@@ -165,10 +166,48 @@ enum EventsCommand {
     Correlate {
         #[arg(long, default_value = "data/events/sysmon.jsonl")]
         spool: PathBuf,
-        /// C2 cache for AG-C002 (only fresh indicators count).
-        #[arg(long, default_value = "data/c2-cache.json")]
-        c2_cache: PathBuf,
+        #[command(flatten)]
+        iocs: IocArgs,
     },
+    /// Attribute IP and DNS IOC evidence to processes, with confidence and
+    /// unknown visibility (DoH, VPN, disabled event types) stated.
+    Iocs {
+        #[arg(long, default_value = "data/events/sysmon.jsonl")]
+        spool: PathBuf,
+        #[command(flatten)]
+        iocs: IocArgs,
+    },
+}
+
+#[derive(clap::Args)]
+struct IocArgs {
+    /// C2 IP cache (only fresh indicators count as active).
+    #[arg(long, default_value = "data/c2-cache.json")]
+    c2_cache: PathBuf,
+    /// User-owned IOC list: JSON array of {type: ip|domain, value, expires_at_unix}.
+    #[arg(long)]
+    local_iocs: Option<PathBuf>,
+    /// User exceptions: same format plus a required `reason`; expired entries do not apply.
+    #[arg(long)]
+    allowlist: Option<PathBuf>,
+}
+
+impl IocArgs {
+    fn load(&self) -> Result<ioc::IocSet> {
+        let cache = self.c2_cache.exists().then_some(self.c2_cache.as_path());
+        if cache.is_none() {
+            eprintln!(
+                "warning: no C2 cache at {}; only local IOCs are used",
+                self.c2_cache.display()
+            );
+        }
+        ioc::IocSet::load(
+            cache,
+            self.local_iocs.as_deref(),
+            self.allowlist.as_deref(),
+            now(),
+        )
+    }
 }
 
 #[derive(Subcommand)]
@@ -200,6 +239,10 @@ enum C2Command {
     Update {
         #[arg(long, default_value = "data/c2-cache.json")]
         cache: PathBuf,
+        /// Also fetch a source that is off by default (e.g. c2intel_verified,
+        /// CC BY-NC-SA 4.0: non-commercial use only).
+        #[arg(long = "include-source")]
+        include_source: Vec<String>,
     },
     /// Check an IP address against local cached indicators.
     Check {
@@ -493,12 +536,30 @@ fn main() -> Result<()> {
                 },
         } => collect_events(&channel, spool, checkpoint, max_events)?,
         Commands::Events {
-            command: EventsCommand::Correlate { spool, c2_cache },
+            command: EventsCommand::Iocs { spool, iocs },
         } => {
             let (events, bad_lines) = events::process::read_spool(&spool)?;
             let table = events::process::ProcessTable::build(&events);
-            let iocs = c2::IocLookup::load(&c2_cache)?;
-            let result = events::correlate::correlate(&table, &|ip| iocs.fresh_sources(ip));
+            let report = events::network::attribute(&table, &iocs.load()?);
+            println!(
+                "{}",
+                serde_json::json!({"events": events.len(), "bad_lines": bad_lines, "report": report})
+            );
+        }
+        Commands::Events {
+            command: EventsCommand::Correlate { spool, iocs },
+        } => {
+            let (events, bad_lines) = events::process::read_spool(&spool)?;
+            let table = events::process::ProcessTable::build(&events);
+            let iocs = iocs.load()?;
+            let active = |ip: &str| {
+                iocs.ip(ip)
+                    .into_iter()
+                    .filter(ioc::IocEvidence::active)
+                    .map(|e| e.source_id)
+                    .collect()
+            };
+            let result = events::correlate::correlate(&table, &active);
             println!(
                 "{}",
                 serde_json::json!({
@@ -529,7 +590,10 @@ fn main() -> Result<()> {
         }
         Commands::Fim { command } => run_fim(command)?,
         Commands::C2 { command } => match command {
-            C2Command::Update { cache } => c2::update(&cache)?,
+            C2Command::Update {
+                cache,
+                include_source,
+            } => c2::update(&cache, &include_source)?,
             C2Command::Check { ip, cache } => c2::check(&cache, ip)?,
             C2Command::Status { cache } => c2::status(&cache)?,
         },

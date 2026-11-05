@@ -26,6 +26,8 @@ pub struct Contact {
     pub ip: Option<String>,
     pub port: Option<u16>,
     pub dns_name: Option<String>,
+    /// Addresses a DNS query (Sysmon ID 22) answered with, normalized.
+    pub resolved_ips: Vec<String>,
     pub event_uid: String,
 }
 
@@ -168,6 +170,10 @@ impl ProcessTable {
                         ip: e.ip.clone(),
                         port: e.port,
                         dns_name: e.dns_name.clone(),
+                        resolved_ips: e
+                            .field_owned("QueryResults")
+                            .map(|r| parse_query_results(&r))
+                            .unwrap_or_default(),
                         event_uid: e.event_uid.clone(),
                     });
                 } else {
@@ -247,6 +253,14 @@ impl EventEnvelope {
             .cloned()
             .filter(|v| !v.is_empty())
     }
+}
+
+/// Sysmon `QueryResults` look like `type:  5 cdn.example;::ffff:192.0.2.1;192.0.2.2;`.
+pub fn parse_query_results(text: &str) -> Vec<String> {
+    text.split(';')
+        .filter_map(crate::ioc::normalize_ip)
+        .take(MAX_REFS)
+        .collect()
 }
 
 /// Read a spool written by `events collect`. Malformed or oversized lines are

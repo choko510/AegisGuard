@@ -1,5 +1,6 @@
 //! Read-only defensive C2 indicator feeds with independent freshness per source.
 //! Updates never alter firewall settings or upload local files.
+use crate::ioc::IocEvidence;
 use crate::store::{self, Generation};
 use crate::Result;
 use serde::{Deserialize, Serialize};
@@ -16,16 +17,44 @@ const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_PER_FEED: usize = 50_000;
 const FEED_TTL_SECONDS: u64 = 48 * 3600;
-const FEEDS: [(&str, &str); 2] = [
-    (
-        "feodo",
-        "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt",
-    ),
-    (
-        "c2intel_verified",
-        "https://raw.githubusercontent.com/drb-ra/C2IntelFeeds/master/feeds/IPC2s.csv",
-    ),
+/// IOC source registry: where each feed comes from, under which terms, and
+/// whether it is fetched by default.
+pub struct FeedSource {
+    pub name: &'static str,
+    pub url: &'static str,
+    pub license_ref: &'static str,
+    /// Fetched without being named explicitly on `c2 update`.
+    pub default_enabled: bool,
+    /// How much a single match from this source supports a finding.
+    pub confidence: &'static str,
+}
+
+pub const SOURCES: [FeedSource; 2] = [
+    FeedSource {
+        name: "feodo",
+        url: "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt",
+        license_ref: "abuse.ch terms of use (Feodo Tracker data: CC0)",
+        default_enabled: true,
+        confidence: "medium",
+    },
+    // CC BY-NC-SA 4.0: only fetched when the user explicitly opts in (non-commercial use).
+    FeedSource {
+        name: "c2intel_verified",
+        url: "https://raw.githubusercontent.com/drb-ra/C2IntelFeeds/master/feeds/IPC2s.csv",
+        license_ref: "CC BY-NC-SA 4.0 (non-commercial; attribution; share-alike)",
+        default_enabled: false,
+        confidence: "low",
+    },
 ];
+
+const FEEDS: [(&str, &str); 2] = [
+    (SOURCES[0].name, SOURCES[0].url),
+    (SOURCES[1].name, SOURCES[1].url),
+];
+
+pub fn source_info(name: &str) -> Option<&'static FeedSource> {
+    SOURCES.iter().find(|s| s.name == name)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Indicator {
@@ -296,7 +325,13 @@ fn write_cache(path: &Path, cache: &Cache) -> Result<()> {
     store::store(path, &bytes, |b| parse_cache(b).map(|_| ()))
 }
 
-pub fn update(path: &Path) -> Result<()> {
+/// Fetch the default sources plus any explicitly `included` ones.
+pub fn update(path: &Path, included: &[String]) -> Result<()> {
+    for name in included {
+        if source_info(name).is_none() {
+            return Err(format!("unknown C2 source {name}").into());
+        }
+    }
     let (mut cache, _) = read_cache(path)?;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
@@ -304,7 +339,14 @@ pub fn update(path: &Path) -> Result<()> {
         .build()?;
     let mut successes = 0usize;
     let mut failed = Vec::new();
-    for (source, url) in FEEDS {
+    let selected = SOURCES
+        .iter()
+        .filter(|s| s.default_enabled || included.iter().any(|n| n == s.name));
+    for feed in selected {
+        let (source, url) = (feed.name, feed.url);
+        if !feed.default_enabled {
+            eprintln!("{source}: fetched on request; terms: {}", feed.license_ref);
+        }
         match fetch(&client, url) {
             Ok(body) if apply_feed(&mut cache, source, &body, epoch()) => {
                 let count = cache.entries.iter().filter(|e| e.source == source).count();
@@ -336,6 +378,31 @@ pub fn update(path: &Path) -> Result<()> {
         }))?
     );
     Ok(())
+}
+
+fn ip_evidence(cache: &Cache, ip: IpAddr, now: u64) -> Vec<IocEvidence> {
+    let mut out: Vec<IocEvidence> = Vec::new();
+    for entry in cache.entries.iter().filter(|e| e.ip == ip) {
+        if out.iter().any(|e| e.source_id == entry.source) {
+            continue;
+        }
+        let state = source_state(cache, &entry.source);
+        let info = source_info(&entry.source);
+        let observed = state.map(|s| s.last_success_at).unwrap_or(0);
+        out.push(IocEvidence {
+            indicator_type: "ip",
+            normalized_value: ip.to_string(),
+            source_id: entry.source.clone(),
+            license_ref: info.map(|i| i.license_ref).unwrap_or("unknown").into(),
+            observed_at_unix: observed,
+            expires_at_unix: observed.saturating_add(FEED_TTL_SECONDS),
+            version: CACHE_VERSION,
+            confidence: info.map(|i| i.confidence).unwrap_or("low"),
+            stale: !is_fresh(state, now),
+            allowlist_reason: None,
+        });
+    }
+    out
 }
 
 fn effective_matches(cache: &Cache, ip: IpAddr, now: u64) -> (Vec<&str>, Vec<&str>) {
@@ -379,25 +446,20 @@ fn source_overview(cache: &Cache, now: u64) -> Vec<serde_json::Value> {
 /// Offline lookup of fresh (non-expired) IOC sources, for event correlation.
 pub struct IocLookup {
     cache: Cache,
-    now: u64,
 }
 
 impl IocLookup {
     pub fn load(path: &Path) -> Result<Self> {
         let (cache, _) = read_cache(path)?;
-        Ok(Self {
-            cache,
-            now: epoch(),
-        })
+        Ok(Self { cache })
     }
 
-    /// Feeds that list `ip` with fresh data; stale matches are not returned.
-    pub fn fresh_sources(&self, ip: &str) -> Vec<String> {
+    /// Evidence for an already normalized IP, stale entries included and flagged.
+    pub fn evidence(&self, ip: &str, now: u64) -> Vec<IocEvidence> {
         let Ok(ip) = ip.parse::<IpAddr>() else {
             return Vec::new();
         };
-        let (fresh, _) = effective_matches(&self.cache, ip, self.now);
-        fresh.into_iter().map(str::to_owned).collect()
+        ip_evidence(&self.cache, ip, now)
     }
 }
 
@@ -412,6 +474,7 @@ pub fn check(path: &Path, ip: IpAddr) -> Result<()> {
             "matched": !fresh.is_empty(),
             "sources": fresh,
             "stale_matches_ignored": stale,
+            "evidence": ip_evidence(&cache, ip, now),
             "feeds": source_overview(&cache, now),
             "cache_generation": generation.map(Generation::as_str),
             "caution": "Old IP indicators are not considered active. IOC match is not proof of infection.",
@@ -660,9 +723,15 @@ mod tests {
         ));
         write_cache(&path, &cache).unwrap();
         let lookup = IocLookup::load(&path).unwrap();
-        assert_eq!(lookup.fresh_sources("1.2.3.4"), vec!["feodo".to_owned()]);
-        assert!(lookup.fresh_sources("5.6.7.8").is_empty());
-        assert!(lookup.fresh_sources("not-an-ip").is_empty());
+        let fresh = lookup.evidence("1.2.3.4", now);
+        assert_eq!(
+            (fresh[0].source_id.as_str(), fresh[0].stale),
+            ("feodo", false)
+        );
+        assert_eq!(fresh[0].license_ref, SOURCES[0].license_ref);
+        let stale = lookup.evidence("5.6.7.8", now);
+        assert!(stale[0].stale);
+        assert!(lookup.evidence("not-an-ip", now).is_empty());
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

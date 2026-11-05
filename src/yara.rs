@@ -88,10 +88,32 @@ pub fn compile_dir(dir: &Path) -> Result<RuleSet, Vec<String>> {
     if files.len() > MAX_RULE_FILES {
         problems.push("too many rule files".into());
     }
+    let mut sources = Vec::new();
+    for path in &files {
+        match fs::read_to_string(path) {
+            Ok(source) => sources.push((
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                source,
+            )),
+            Err(e) => problems.push(format!("{}: {e}", path.display())),
+        }
+    }
     if !problems.is_empty() {
         return Err(problems);
     }
+    compile_sources(&sources)
+}
 
+/// Compile named in-memory rule sources (e.g. a verified rule pack) with the
+/// same gate as [`compile_dir`]. The provenance ledger is checked by the caller.
+pub fn compile_sources(sources: &[(String, String)]) -> Result<RuleSet, Vec<String>> {
+    let mut problems = Vec::new();
+    if sources.is_empty() || sources.len() > MAX_RULE_FILES {
+        problems.push("a rule set needs between 1 and 256 files".into());
+    }
     let mut compiler = yara_x::Compiler::new();
     compiler
         .enable_includes(false)
@@ -99,17 +121,13 @@ pub fn compile_dir(dir: &Path) -> Result<RuleSet, Vec<String>> {
         .error_on_slow_loop(true);
     let mut digest = Sha256::new();
     let mut total = 0u64;
-    for path in &files {
-        let source = match fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                problems.push(format!("{}: {e}", path.display()));
-                continue;
-            }
-        };
+    for (name, source) in sources {
+        if source.len() as u64 > MAX_RULE_FILE_BYTES {
+            problems.push(format!("{name}: exceeds the rule file size limit"));
+            continue;
+        }
         total += source.len() as u64;
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        for module in imports(&source) {
+        for module in imports(source) {
             if !ALLOWED_IMPORTS.contains(&module.as_str()) {
                 problems.push(format!("{name}: import \"{module}\" is not allowed"));
             }
@@ -118,13 +136,13 @@ pub fn compile_dir(dir: &Path) -> Result<RuleSet, Vec<String>> {
         digest.update(name.as_bytes());
         digest.update((source.len() as u64).to_le_bytes());
         digest.update(source.as_bytes());
-        let namespace = path
+        let namespace = Path::new(name)
             .file_stem()
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
         compiler.new_namespace(&namespace);
-        let code = yara_x::SourceCode::from(source.as_str()).with_origin(name.as_ref());
+        let code = yara_x::SourceCode::from(source.as_str()).with_origin(name.as_str());
         if let Err(e) = compiler.add_source(code) {
             problems.push(e.to_string());
         }

@@ -11,7 +11,9 @@ publish = false
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 ctrlc = "3"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 flate2 = "1"
+getrandom = "0.2"
 hex = "0.4"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }

@@ -379,3 +379,127 @@ fn yara_request_without_the_feature_fails_closed() {
     assert!(!success);
     assert!(run.reports.is_empty());
 }
+
+fn aegisguard(args: &[&str]) -> (String, bool) {
+    let out = Command::new(env!("CARGO_BIN_EXE_aegisguard"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(args)
+        .output()
+        .expect("run aegisguard");
+    (String::from_utf8(out.stdout).unwrap(), out.status.success())
+}
+
+#[cfg(feature = "yara")]
+#[test]
+fn signed_rule_pack_lifecycle_through_the_cli() {
+    let dir = temp_dir("rulepack-cli");
+    let key = dir.join("maintainer");
+    let store = dir.join("store");
+    let (store_s, pub_s) = (
+        store.to_str().unwrap().to_owned(),
+        key.with_extension("pub").to_str().unwrap().to_owned(),
+    );
+    assert!(aegisguard(&["rules", "keygen", key.to_str().unwrap()]).1);
+    for sequence in ["1", "2"] {
+        let out = dir.join(format!("pack{sequence}"));
+        let (_, ok) = aegisguard(&[
+            "rules",
+            "pack",
+            "rules/aegisguard",
+            "--key",
+            key.with_extension("key").to_str().unwrap(),
+            "--sequence",
+            sequence,
+            "--out",
+            out.to_str().unwrap(),
+        ]);
+        assert!(ok);
+        let (stdout, ok) = aegisguard(&[
+            "rules",
+            "install",
+            out.to_str().unwrap(),
+            "--trusted-key",
+            &pub_s,
+            "--store",
+            &store_s,
+        ]);
+        assert!(ok, "{stdout}");
+    }
+    // Replaying sequence 1 is refused.
+    let (_, ok) = aegisguard(&[
+        "rules",
+        "install",
+        dir.join("pack1").to_str().unwrap(),
+        "--trusted-key",
+        &pub_s,
+        "--store",
+        &store_s,
+    ]);
+    assert!(!ok);
+    let run = scan(&[FIXTURES, "--rule-store", &store_s, "--trusted-key", &pub_s]);
+    assert!(run.reports.iter().any(|r| r["yara"]["matches"]
+        .as_array()
+        .is_some_and(|m| !m.is_empty())));
+    let (stdout, ok) = aegisguard(&[
+        "rules",
+        "rollback",
+        "--trusted-key",
+        &pub_s,
+        "--store",
+        &store_s,
+    ]);
+    assert!(ok);
+    assert!(stdout.contains("\"sequence\":1"));
+    // A different key is not trusted.
+    let other = dir.join("other");
+    assert!(aegisguard(&["rules", "keygen", other.to_str().unwrap()]).1);
+    let (run, ok) = scan_allowing_failure(&[
+        FIXTURES,
+        "--rule-store",
+        &store_s,
+        "--trusted-key",
+        other.with_extension("pub").to_str().unwrap(),
+    ]);
+    assert!(!ok && run.reports.is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(not(feature = "yara"))]
+#[test]
+fn rule_pack_cannot_be_installed_without_an_engine_to_validate_it() {
+    let dir = temp_dir("rulepack-noyara");
+    let key = dir.join("k");
+    assert!(aegisguard(&["rules", "keygen", key.to_str().unwrap()]).1);
+    // Keys are never overwritten.
+    assert!(!aegisguard(&["rules", "keygen", key.to_str().unwrap()]).1);
+    let out = dir.join("pack");
+    assert!(
+        aegisguard(&[
+            "rules",
+            "pack",
+            "rules/aegisguard",
+            "--key",
+            key.with_extension("key").to_str().unwrap(),
+            "--sequence",
+            "1",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .1
+    );
+    let (_, ok) = aegisguard(&[
+        "rules",
+        "install",
+        out.to_str().unwrap(),
+        "--trusted-key",
+        key.with_extension("pub").to_str().unwrap(),
+        "--store",
+        dir.join("store").to_str().unwrap(),
+    ]);
+    assert!(
+        !ok,
+        "a pack whose rules cannot be compiled must not be installed"
+    );
+    assert!(!dir.join("store").join("rulepack.json").exists());
+    fs::remove_dir_all(dir).unwrap();
+}

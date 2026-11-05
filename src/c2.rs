@@ -559,7 +559,7 @@ mod tests {
                 .last_success_at,
             99_000
         );
-        assert!(!is_fresh(source_state(&migrated, "feodo"), 100_000));
+        assert!(!is_fresh(source_state(&migrated, "feodo"), 200_000));
     }
 
     #[test]

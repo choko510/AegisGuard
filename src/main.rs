@@ -1,5 +1,8 @@
 mod budget;
 mod c2;
+// The collector only has a production caller on Windows (the Event Log source).
+#[cfg_attr(not(windows), allow(dead_code))]
+mod events;
 mod fsafe;
 mod jsonl;
 mod model;
@@ -74,6 +77,11 @@ enum Commands {
         #[command(subcommand)]
         command: RulesCommand,
     },
+    /// Read Windows event logs into a local spool (read-only; Windows only).
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
     /// Manage a locally cached list of public C2 indicators.
     C2 {
         #[command(subcommand)]
@@ -122,6 +130,22 @@ enum RulesCommand {
         trusted_key: PathBuf,
         #[arg(long, default_value = "data/rules")]
         store: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum EventsCommand {
+    /// Append new events of one channel to a JSONL spool. The cursor advances only
+    /// after the spool is flushed; lost history is reported as a gap.
+    Collect {
+        #[arg(long, default_value = "Microsoft-Windows-Sysmon/Operational")]
+        channel: String,
+        #[arg(long, default_value = "data/events/sysmon.jsonl")]
+        spool: PathBuf,
+        #[arg(long, default_value = "data/events/sysmon.checkpoint.json")]
+        checkpoint: PathBuf,
+        #[arg(long, default_value_t = 100_000)]
+        max_events: u64,
     },
 }
 
@@ -322,6 +346,23 @@ fn load_ruleset(
     compile_payload(&pack.payload).map(Some)
 }
 
+#[cfg(windows)]
+fn collect_events(channel: &str, spool: PathBuf, checkpoint: PathBuf, max: u64) -> Result<()> {
+    let mut source = events::winevt::WinEventSource::new(channel);
+    let paths = events::collector::Paths { spool, checkpoint };
+    let health = events::collector::collect(&mut source, &paths, max);
+    println!("{}", serde_json::to_string(&health)?);
+    match health.status {
+        "ok" => Ok(()),
+        status => Err(format!("event collection {status}; see the health record").into()),
+    }
+}
+
+#[cfg(not(windows))]
+fn collect_events(_: &str, _: PathBuf, _: PathBuf, _: u64) -> Result<()> {
+    Err("event collection reads the Windows Event Log and is only available on Windows".into())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -367,6 +408,15 @@ fn main() -> Result<()> {
             scan::run(&path, recursive, log, limits, engines)?
         }
         Commands::Rules { command } => run_rules(command)?,
+        Commands::Events {
+            command:
+                EventsCommand::Collect {
+                    channel,
+                    spool,
+                    checkpoint,
+                    max_events,
+                },
+        } => collect_events(&channel, spool, checkpoint, max_events)?,
         Commands::C2 { command } => match command {
             C2Command::Update { cache } => c2::update(&cache)?,
             C2Command::Check { ip, cache } => c2::check(&cache, ip)?,

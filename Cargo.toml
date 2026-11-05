@@ -15,6 +15,7 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 flate2 = "1"
 getrandom = "0.2"
 hex = "0.4"
+quick-xml = "0.41"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
@@ -36,7 +37,7 @@ strip = true
 yara = ["dep:yara-x"]
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_EventLog"] }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2"

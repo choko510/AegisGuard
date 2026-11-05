@@ -301,6 +301,9 @@ enum BrowserCommand {
         #[arg(long)]
         local_app_data: Option<PathBuf>,
     },
+    /// Audit all supported browsers: install/user data, forced extensions by
+    /// policy, and per-user COM servers in browser data (read-only).
+    Audit,
 }
 
 #[derive(Subcommand)]
@@ -847,6 +850,21 @@ fn main() -> Result<()> {
             print_json(&report)?;
         }
         Commands::Service { command } => run_service(command)?,
+        Commands::Browser {
+            command: BrowserCommand::Audit,
+        } => {
+            #[cfg(windows)]
+            let report = aegisguard::browser_audit::audit(
+                &aegisguard::browser_audit::Roots::from_env(),
+                &aegisguard::browser_audit::WindowsRegistry,
+            );
+            #[cfg(not(windows))]
+            return Err(
+                "browser audit reads the Windows registry and is only available on Windows".into(),
+            );
+            #[cfg(windows)]
+            print_json(&report)?;
+        }
         Commands::Defender {
             command: DefenderCommand::Audit { from_json },
         } => {

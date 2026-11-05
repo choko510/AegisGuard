@@ -462,6 +462,8 @@ pub enum DocumentKind {
     BrowserCheck,
     /// `events timeline` output.
     Timeline,
+    /// `browser audit` output.
+    BrowserAudit,
     Unknown,
 }
 
@@ -492,6 +494,8 @@ pub fn classify(value: &Value) -> DocumentKind {
         DocumentKind::RulePack
     } else if has("check_id") && has("verdict") {
         DocumentKind::BrowserCheck
+    } else if has("per_user_com_servers") && has("browsers") {
+        DocumentKind::BrowserAudit
     } else if has("timelines") && has("omitted") {
         DocumentKind::Timeline
     } else {

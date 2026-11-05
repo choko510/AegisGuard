@@ -39,7 +39,8 @@
     "signals": [],
     "started_at_unix_ms": "<volatile>",
     "status": "incomplete",
-    "warning": "Analysis was incomplete; undetected behavior is possible"
+    "warning": "Analysis was incomplete; undetected behavior is possible",
+    "yara": null
   },
   {
     "analysis_complete": true,
@@ -79,7 +80,8 @@
     "signals": [],
     "started_at_unix_ms": "<volatile>",
     "status": "analyzed",
-    "warning": null
+    "warning": null,
+    "yara": null
   },
   {
     "analysis_complete": true,
@@ -126,7 +128,8 @@
     ],
     "started_at_unix_ms": "<volatile>",
     "status": "analyzed",
-    "warning": null
+    "warning": null,
+    "yara": null
   },
   {
     "analysis_complete": false,
@@ -165,6 +168,7 @@
     "signals": [],
     "started_at_unix_ms": "<volatile>",
     "status": "invalid_pe",
-    "warning": "Truncated DOS header"
+    "warning": "Truncated DOS header",
+    "yara": null
   }
 ]

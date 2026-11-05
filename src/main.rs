@@ -4,9 +4,12 @@ mod fsafe;
 mod jsonl;
 mod model;
 mod pe;
+mod rules;
 mod scan;
 mod script;
 mod store;
+#[cfg(feature = "yara")]
+mod yara;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -54,12 +57,27 @@ enum Commands {
         /// Stop after this many seconds of wall-clock time.
         #[arg(long, default_value_t = 4 * 3600)]
         max_duration_secs: u64,
+        /// Also scan raw and decoded layers with the YARA rules in this directory
+        /// (audit only; needs a build with `--features yara`).
+        #[arg(long)]
+        yara_rules: Option<PathBuf>,
+    },
+    /// Validate YARA rule sources: ledger, compile errors and warnings.
+    Rules {
+        #[command(subcommand)]
+        command: RulesCommand,
     },
     /// Manage a locally cached list of public C2 indicators.
     C2 {
         #[command(subcommand)]
         command: C2Command,
     },
+}
+
+#[derive(Subcommand)]
+enum RulesCommand {
+    /// Compile a rule directory with the same gate used by `scan --yara-rules`.
+    Check { dir: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -82,6 +100,35 @@ enum C2Command {
     },
 }
 
+#[cfg(not(feature = "yara"))]
+const NO_YARA: &str = "this build has no YARA support; rebuild with `--features yara`";
+
+#[cfg(feature = "yara")]
+fn check_rules(dir: &std::path::Path) -> Result<()> {
+    match yara::compile_dir(dir) {
+        Ok(set) => {
+            println!(
+                "{}",
+                serde_json::json!({"status": "ok", "ruleset_sha256": set.sha256, "rule_ids": set.rule_ids})
+            );
+            Ok(())
+        }
+        Err(problems) => {
+            println!(
+                "{}",
+                serde_json::json!({"status": "rejected", "problems": problems})
+            );
+            Err("rule set rejected".into())
+        }
+    }
+}
+
+#[cfg(not(feature = "yara"))]
+fn check_rules(dir: &std::path::Path) -> Result<()> {
+    rules::read_ledger(dir)?;
+    Err(NO_YARA.into())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -95,6 +142,7 @@ fn main() -> Result<()> {
             max_files,
             max_total_bytes,
             max_duration_secs,
+            yara_rules,
         } => {
             let limits = scan::Limits {
                 per_file: Duration::from_millis(file_time_limit_ms),
@@ -105,8 +153,33 @@ fn main() -> Result<()> {
             let log = output
                 .map(|p| jsonl::JsonlLog::open(&p, output_max_bytes, output_generations))
                 .transpose()?;
-            scan::run(&path, recursive, log, limits)?
+            #[cfg(feature = "yara")]
+            let ruleset = yara_rules
+                .as_deref()
+                .map(|dir| {
+                    yara::compile_dir(dir).map_err(|problems| {
+                        problems.join(
+                            "
+",
+                        )
+                    })
+                })
+                .transpose()?;
+            #[cfg(not(feature = "yara"))]
+            if yara_rules.is_some() {
+                return Err(NO_YARA.into());
+            }
+            #[cfg(feature = "yara")]
+            let engines = scan::Engines {
+                yara: ruleset.as_ref(),
+            };
+            #[cfg(not(feature = "yara"))]
+            let engines = scan::Engines::default();
+            scan::run(&path, recursive, log, limits, engines)?
         }
+        Commands::Rules {
+            command: RulesCommand::Check { dir },
+        } => check_rules(&dir)?,
         Commands::C2 { command } => match command {
             C2Command::Update { cache } => c2::update(&cache)?,
             C2Command::Check { ip, cache } => c2::check(&cache, ip)?,

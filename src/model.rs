@@ -100,6 +100,29 @@ impl FileIdentity {
     }
 }
 
+/// One YARA rule match on one analyzed layer. Matched bytes are never stored.
+#[derive(Debug, Clone, Serialize)]
+pub struct YaraMatch {
+    pub rule: String,
+    pub namespace: String,
+    pub rule_id: String,
+    pub severity: u32,
+    /// `raw` or `decoded/<n>:<method>` for a deobfuscated script layer.
+    pub layer: String,
+    pub layer_sha256: String,
+    /// (offset, length) pairs within the layer, capped; the rest is counted.
+    pub offsets: Vec<(usize, usize)>,
+    pub omitted_offsets: usize,
+}
+
+/// Present only when YARA scanning was requested for this run.
+#[derive(Debug, Serialize)]
+pub struct YaraSummary {
+    pub ruleset_sha256: String,
+    pub layers_scanned: usize,
+    pub matches: Vec<YaraMatch>,
+}
+
 pub fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -132,6 +155,8 @@ pub struct Report {
     pub coverage: Coverage,
     pub file_identity: Option<FileIdentity>,
     pub engine: Engine,
+    /// YARA evidence; absent (null) when YARA was not requested.
+    pub yara: Option<YaraSummary>,
     pub started_at_unix_ms: u64,
     pub completed_at_unix_ms: u64,
 }
@@ -156,6 +181,7 @@ impl Report {
             not_assessed_reason: None,
             coverage: Coverage::default(),
             file_identity: None,
+            yara: None,
             engine: Engine {
                 name: "aegisguard-static",
                 version: env!("CARGO_PKG_VERSION"),

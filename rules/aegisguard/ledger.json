@@ -1,0 +1,12 @@
+[
+  {
+    "file": "pe_behavior.yar",
+    "origin": "self-authored",
+    "license": "Same terms as the AegisGuard repository (owner decision pending)"
+  },
+  {
+    "file": "script_behavior.yar",
+    "origin": "self-authored",
+    "license": "Same terms as the AegisGuard repository (owner decision pending)"
+  }
+]

@@ -515,7 +515,19 @@ fn analyze_layer(layer: &Layer, report: &mut Report) {
     }
 }
 
+#[cfg(test)]
 pub fn inspect(data: &[u8], report: &mut Report, budget: &Budget) {
+    inspect_layers(data, report, budget, &mut |_, _, _| {});
+}
+
+/// Like [`inspect`], and calls `visit(report, layer_name, text)` for every decoded
+/// layer (not the raw input) so other engines can scan it without a copy.
+pub fn inspect_layers(
+    data: &[u8],
+    report: &mut Report,
+    budget: &Budget,
+    visit: &mut dyn FnMut(&mut Report, &str, &str),
+) {
     // scan.rs caps input at 4 MiB, including partially written files.
     // Root files are capped by scan.rs at 4 MiB; derived layers are capped separately.
     // Decode UTF-16 even for large root scripts instead of silently missing their text.
@@ -557,6 +569,13 @@ pub fn inspect(data: &[u8], report: &mut Report, budget: &Budget) {
         }
         processed += 1;
         analyze_layer(&layer, report);
+        if layer.depth > 0 {
+            visit(
+                report,
+                &format!("decoded/{processed}:{}", layer.origin),
+                &layer.text,
+            );
+        }
         let derived = derive(&layer.text, is_batch, budget);
         for reason in derived.reasons {
             report.mark_incomplete(reason);

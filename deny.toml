@@ -5,6 +5,12 @@ all-features = true
 [advisories]
 # RustSec advisories: vulnerabilities and unmaintained crates fail CI.
 yanked = "deny"
+ignore = [
+    # Unmaintained (not a vulnerability). Pulled in only by the optional `yara`
+    # feature: yara-x uses bincode for compiled-rule (de)serialization, which
+    # AegisGuard never uses; it compiles trusted text rules in-process.
+    { id = "RUSTSEC-2025-0141", reason = "yara-x rule serialization only; never used by AegisGuard" },
+]
 
 [licenses]
 # Permissive licenses only. GPL/AGPL/LGPL code is not allowed (ADOPTION_MATRIX.md).

@@ -55,7 +55,7 @@ cargo run --release -- c2 status
 - `not_assessed`：対象外、検査失敗、異常なPE構造、サイズ超過など。安全と扱いません。
 - スコアは初期ヒューリスティックスであり感染確率ではありません。コメントや正規の管理スクリプトにも反応し得ます。
 - 独自暗号化、動的に生成されるコード、メモリだけで実行されるペイロード、複雑なJS ASTの復元などには未対応です。
-- PEのAuthenticode署名検証、インポートテーブル解析、YARA-Xの実行は未実装です。
+- PEのAuthenticode署名検証、インポートテーブル解析は未実装です。YARA-Xは任意機能（`--features yara`）で、YARAのモジュール（`pe`等）は使えません。
 - C2フィードが空・古い・未登録であっても、感染していないことを示すわけではありません。
 - C2キャッシュはバージョン2でフィード単位の `last_success_at` と48時間の期限を管理します。**更新に失敗したフィードの時刻は変更しません。**
 - `c2 status` の `feeds[].stale` を参照してください。`c2 check` は期限切れのIPを `matched=true` にせず、`stale_matches_ignored` に区別して表示します。
@@ -98,6 +98,23 @@ cargo run --release -- c2 status
 | Ctrl-C | — | 処理中の単位を終えて `scan_cancelled` を記録し、終了コード非0 |
 
 走査は単一スレッドです。ZIP等のアーカイブ展開は実装していません。
+
+### YARA-X（任意機能・監査のみ）
+
+`--features yara` でビルドした場合だけ使えます（Rust 1.95以上が必要。既定ビルドはRust 1.85のまま）。
+
+```powershell
+cargo build --release --features yara
+# ルールのゲート検査（台帳・コンパイルエラー・警告・必須メタデータ）
+.\target\release\aegisguard.exe rules check rules\aegisguard
+# 原本と復号層をYARAでも検査（一致は根拠として記録するだけで、削除・遮断はしません）
+.\target\release\aegisguard.exe scan C:\path\to\folder --recursive --yara-rules rules\aegisguard
+```
+
+- ルールはテキストのみを本体内でコンパイルします。`include`・未許可の`import`・警告・メタデータ欠落・台帳（`ledger.json`）にないファイルがあれば、ルールセット全体を拒否します。
+- 結果は `yara` フィールド（ルールセットのSHA-256、検査した層の数、一致したルールID・層・オフセット）と `yara_rule_match` シグナルに出ます。一致したバイト列は記録しません。
+- 時間切れ・タイムアウト・エンジンエラーは `incomplete` になります。
+- 同梱ルール（`rules/aegisguard`）は自作のみです。第三者ルールは使用・再配布の許諾を確認して台帳に記録するまで追加しません。方式の比較と決定は [YARA_X_INTEGRATION.md](docs/research/decisions/YARA_X_INTEGRATION.md) を参照してください。
 
 ### 今後の本番機能
 

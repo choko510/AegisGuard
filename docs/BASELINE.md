@@ -59,3 +59,15 @@ CIの `baseline` ジョブが毎回同じ合成コーパスで再計測し、ジ
 | `C:\Windows\diagnostics`（378件） | 0 / 0 | 0 / 0 |
 
 残る指摘の主因は、モジュールマニフェスト（`.psd1`）がコマンド名を**文字列として列挙**していること（例：`Invoke-Expression` を含むエクスポート一覧）。文字列リテラルと実際の呼び出しの区別は構文解析（P5-03）で扱う。`PSDesiredStateConfiguration.psm1` は review から `incomplete`（既存の `candidate_match_limit`）に変わったが、未完了の表示であり安全扱いではない。
+
+## P5-03 第1段階：PowerShellの文字列リテラルの分離（`builtin-static-3`）
+
+PowerShellの文字列（`'...'`・`"..."`・ヒア文字列 `@'...'@` / `@"..."@`）の中身を空白に置き換えた「コード部分」と、元の全文の両方で判定するようにした。コマンド・呼び出しの指標（ダウンロード、実行、タスク/サービス作成、Defender除外・ログ消去のコマンド）はコード部分で、データの指標（URL、資格情報ストア名、Runキーのパス、AMSIの型名）は全文で見る。`iex` などコード実行に渡る文は全文で読む（文字列がコードとして実行されるため）。`$(...)` を含む展開文字列と閉じていない文字列は空白化しない。
+
+| 対象（このWindows 11、スクリプトのみ） | P5-02後 review/high | P5-03後 review/high |
+|---|---|---|
+| `C:\Windows\System32\WindowsPowerShell\v1.0` | 3 / 1 | 0 / 0 |
+| `C:\Program Files\WindowsPowerShell\Modules` | 1 / 0 | 1 / 0（PowerShellGet の `PSModule.psm1`：実際にモジュールを取得・導入する処理） |
+| `C:\Windows\diagnostics` | 0 / 0 | 0 / 0 |
+
+合成コーパスのゲート（benign 系 0 件、synthetic_positive 系は全件 review 以上）は維持。

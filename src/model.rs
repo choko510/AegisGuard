@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
 /// Identifies the built-in static heuristics. Bump whenever a signal, its
 /// severity or a deobfuscation rule changes so that old results can be told apart.
-pub const BUILTIN_RULESET: &str = "builtin-static-2";
+pub const BUILTIN_RULESET: &str = "builtin-static-3";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Signal {

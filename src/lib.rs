@@ -32,6 +32,7 @@ pub mod rulepack;
 pub mod rules;
 pub mod scan;
 pub mod script;
+pub mod service;
 pub mod store;
 #[cfg(feature = "yara")]
 pub mod yara;

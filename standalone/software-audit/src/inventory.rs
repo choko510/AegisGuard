@@ -55,12 +55,16 @@ pub fn assemble(sources: Vec<SourceData>) -> InventoryReport {
     let mut warnings = vec!["msix_and_other_package_managers_not_covered".to_owned()];
     for id in SOURCES {
         let Some(source) = sources.iter().find(|s| s.id == id) else {
-            coverage.sources.push(SourceCoverage { id: id.into(), status: "unavailable".into(), seen: 0 });
+            coverage.sources.push(SourceCoverage { id: id.into(), status: "unavailable".into(), seen: 0, skipped: 0 });
             warnings.push(format!("source_not_collected:{id}"));
             continue;
         };
         let mut status = source.status.clone();
         let mut seen = 0;
+        coverage.skipped += source.skipped;
+        if source.skipped > 0 {
+            status = "partial".into();
+        }
         for entry in source.entries.iter().cloned() {
             if coverage.evaluated >= MAX_ENTRIES {
                 coverage.truncated = true;
@@ -86,7 +90,7 @@ pub fn assemble(sources: Vec<SourceData>) -> InventoryReport {
             }
         }
         if status != "complete" { warnings.push(format!("source_incomplete:{id}:{status}")); }
-        coverage.sources.push(SourceCoverage { id: id.into(), status, seen });
+        coverage.sources.push(SourceCoverage { id: id.into(), status, seen, skipped: source.skipped });
     }
     if coverage.truncated { warnings.push("inventory_entry_limit_reached".into()); }
     if coverage.skipped > 0 { warnings.push("invalid_entries_omitted".into()); }

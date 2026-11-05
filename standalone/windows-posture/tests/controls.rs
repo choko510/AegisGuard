@@ -224,3 +224,45 @@ fn varying_timestamps_are_not_cached() {
     assert_eq!(a["entries"][0]["checked_at"], 100);
     assert_eq!(b["entries"][0]["checked_at"], 200);
 }
+
+
+#[test]
+fn failed_bitlocker_read_methods_never_imply_protection() {
+    for status in ["error", "timeout", "permission_denied"] {
+        let fixture = json!({
+            "bitlocker": {"status": status}
+        });
+        let report = evaluate(&fixture, 11).unwrap();
+        let control = entry(&report, "bitlocker_os_volume");
+        assert_ne!(control["state"], "enabled");
+        assert_ne!(control["state"], "disabled");
+        if status == "permission_denied" {
+            assert_eq!(control["state"], "permission_denied");
+            assert_eq!(report["status"], "permission_denied");
+        } else {
+            assert_eq!(control["state"], "unknown");
+            assert_eq!(report["status"], "unavailable");
+        }
+    }
+}
+
+#[test]
+fn conflicting_or_incomplete_fresh_bitlocker_values_are_unknown() {
+    for (protection, conversion) in [
+        (json!(1), json!(0)),
+        (json!(1), json!(null)),
+        (json!(2), json!(1)),
+        (json!(1), json!(2)),
+    ] {
+        let fixture = json!({
+            "bitlocker": {
+                "status": "ok",
+                "os_volume_count": 1,
+                "protection": protection,
+                "conversion": conversion
+            }
+        });
+        let report = evaluate(&fixture, 11).unwrap();
+        assert_eq!(entry(&report, "bitlocker_os_volume")["state"], "unknown");
+    }
+}

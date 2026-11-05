@@ -22,7 +22,17 @@ fn classify(path: &Path) -> Option<&'static str> {
     }
 }
 
-pub fn scan_file(path: &Path, time_limit: Duration) -> Report {
+/// Optional engines configured for a run. Empty unless built with `--features yara`
+/// and `--yara-rules` was given.
+#[derive(Default, Clone, Copy)]
+pub struct Engines<'a> {
+    #[cfg(feature = "yara")]
+    pub yara: Option<&'a crate::yara::RuleSet>,
+    #[cfg(not(feature = "yara"))]
+    pub _none: std::marker::PhantomData<&'a ()>,
+}
+
+pub fn scan_file(path: &Path, time_limit: Duration, engines: Engines) -> Report {
     let kind = classify(path).unwrap_or("unsupported");
     let mut report = Report::new(path.display().to_string(), kind);
     if kind == "unsupported" {
@@ -170,10 +180,27 @@ pub fn scan_file(path: &Path, time_limit: Duration) -> Report {
 
     report.sha256 = Some(hex::encode(Sha256::digest(&data)));
     let budget = Budget::new(time_limit);
+    #[cfg(not(feature = "yara"))]
+    let _ = engines;
+    #[cfg(feature = "yara")]
+    let mut yara = engines.yara.map(crate::yara::Run::new);
+    #[cfg(feature = "yara")]
+    if let Some(run) = yara.as_mut() {
+        run.scan(&mut report, "raw", &data, &budget);
+    }
     if kind == "pe" {
         pe::inspect(&data, &mut report, &budget);
     } else {
-        script::inspect(&data, &mut report, &budget);
+        script::inspect_layers(&data, &mut report, &budget, &mut |_r, _layer, _text| {
+            #[cfg(feature = "yara")]
+            if let Some(run) = yara.as_mut() {
+                run.scan(_r, _layer, _text.as_bytes(), &budget);
+            }
+        });
+    }
+    #[cfg(feature = "yara")]
+    if let Some(run) = yara {
+        report.yara = Some(run.finish());
     }
     report.finish();
     report
@@ -261,12 +288,22 @@ fn stopped_report(root: &Path, reason: &'static str) -> Report {
     report
 }
 
-pub fn run(path: &Path, recursive: bool, mut log: Option<JsonlLog>, limits: Limits) -> Result<()> {
+pub fn run(
+    path: &Path,
+    recursive: bool,
+    mut log: Option<JsonlLog>,
+    limits: Limits,
+    engines: Engines,
+) -> Result<()> {
     // Ctrl-C finishes the current bounded unit, records the stop and exits.
     let _ = ctrlc::set_handler(budget::cancel);
     let mut summary = Summary::default();
     if path.is_file() || path.is_symlink() {
-        emit(scan_file(path, limits.per_file), &mut log, &mut summary)?;
+        emit(
+            scan_file(path, limits.per_file, engines),
+            &mut log,
+            &mut summary,
+        )?;
         print_summary(&summary);
         return Ok(());
     }
@@ -291,7 +328,11 @@ pub fn run(path: &Path, recursive: bool, mut log: Option<JsonlLog>, limits: Limi
             break;
         }
         match entry {
-            Ok(e) => emit(scan_file(e.path(), limits.per_file), &mut log, &mut summary)?,
+            Ok(e) => emit(
+                scan_file(e.path(), limits.per_file, engines),
+                &mut log,
+                &mut summary,
+            )?,
             Err(e) => {
                 eprintln!("walk error: {e}");
                 emit(walk_error_report(path, &e), &mut log, &mut summary)?;
@@ -344,6 +385,7 @@ mod tests {
         let report = scan_file(
             Path::new("aegisguard_missing_1234.ps1"),
             Limits::default().per_file,
+            Engines::default(),
         );
         assert_eq!(report.risk, "not_assessed");
         assert_eq!(report.assessment, Assessment::NotAssessed);
@@ -354,7 +396,11 @@ mod tests {
 
     #[test]
     fn unsupported_type_is_not_assessed() {
-        let report = scan_file(Path::new("notes.txt"), Limits::default().per_file);
+        let report = scan_file(
+            Path::new("notes.txt"),
+            Limits::default().per_file,
+            Engines::default(),
+        );
         assert_eq!(report.status, "unsupported");
         assert_eq!(report.not_assessed_reason, Some("unsupported_file_type"));
         assert!(report.coverage.analyzers.is_empty());

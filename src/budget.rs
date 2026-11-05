@@ -27,6 +27,13 @@ impl Budget {
         }
     }
 
+    /// Time left, or `None` when the limit was too large to represent.
+    #[cfg_attr(not(feature = "yara"), allow(dead_code))]
+    pub fn remaining(&self) -> Option<Duration> {
+        self.deadline
+            .map(|d| d.saturating_duration_since(Instant::now()))
+    }
+
     /// The incomplete reason when work must stop, or `None` to continue.
     pub fn exceeded(&self) -> Option<&'static str> {
         if cancelled() {

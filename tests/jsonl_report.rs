@@ -343,3 +343,39 @@ fn output_refuses_unrelated_files_and_rotates_its_own() {
     }
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[cfg(feature = "yara")]
+#[test]
+fn yara_rules_add_evidence_without_leaking_content() {
+    let run = scan(&[FIXTURES, "--yara-rules", "rules/aegisguard"]);
+    let by_name = |name: &str| {
+        run.reports
+            .iter()
+            .find(|r| r["path"].as_str().unwrap().ends_with(name))
+            .unwrap()
+            .clone()
+    };
+    let hit = by_name("credential_reference.py");
+    let matches = hit["yara"]["matches"].as_array().unwrap();
+    assert!(matches
+        .iter()
+        .any(|m| m["rule_id"] == "AG-0002" && m["layer"] == "raw"));
+    assert_eq!(hit["yara"]["ruleset_sha256"].as_str().unwrap().len(), 64);
+    let benign = by_name("benign.py");
+    assert_eq!(benign["yara"]["layers_scanned"], 1);
+    assert!(benign["yara"]["matches"].as_array().unwrap().is_empty());
+    assert_eq!(benign["risk"], "low_signal");
+    for report in &run.reports {
+        assert_v1_compatible(report);
+        assert_completeness_contract(report);
+    }
+    assert!(!run.stdout.contains("Login Data") && !run.stdout.contains("collector.example"));
+}
+
+#[cfg(not(feature = "yara"))]
+#[test]
+fn yara_request_without_the_feature_fails_closed() {
+    let (run, success) = scan_allowing_failure(&[FIXTURES, "--yara-rules", "rules/aegisguard"]);
+    assert!(!success);
+    assert!(run.reports.is_empty());
+}

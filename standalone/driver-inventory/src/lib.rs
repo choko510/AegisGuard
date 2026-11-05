@@ -290,6 +290,15 @@ pub fn report(collection: Collection, drivers_only: bool, show_paths: bool, wind
             "service_name": service_name, "kind": kind(s.service_type),
             "service_type_raw": s.service_type, "state": state(s.state),
             "start_type": start_type(s.start_type), "delayed_auto_start": s.delayed_auto_start,
+            "delayed_auto_start_status": if is_driver(s.service_type) || s.start_type != Some(2) {
+                "not_applicable"
+            } else if s.delayed_auto_start.is_some() {
+                "known"
+            } else if s.config_error == Some("permission_denied") {
+                "permission_denied"
+            } else {
+                "unknown"
+            },
             "dependency_count": s.dependency_count,
             "binary": {
                 "normalized_path": normalized.map(|p| disclosed_path(&p, windows_dir, show_paths)),

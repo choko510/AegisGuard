@@ -227,6 +227,7 @@ aegisguard service uninstall                           # 停止して登録を�
 
 - サービスは**観察だけ**を行い、Defender・Firewall・Sysmon・OSの設定を変更せず、削除・隔離もしません。GUIから任意のパスを検査させることはできません（利用者がサービスの権限でファイルを読めないようにするため）。
 - 登録時は `NT AUTHORITY\LocalService`、サービスSID付き、必要な特権は `SeChangeNotifyPrivilege` だけ、既定は手動起動、異常終了時は60秒/5分後に再起動します。Sysmonのログを読むにはLocalSystemまたはEvent Log Readersが必要で、読めない場合は状態に `access_denied` と出ます（「イベントなし」とは扱いません）。
+- 継続収集（P8-02）：設定したチャネル（既定はSysmonとDefender Operational）を間隔ごとに読み、チャネル別のスプール（`spool\<チャネル>.jsonl`）へ追記します。ブックマークは書込み完了後にだけ進み、ログの上書きは `gap` として記録します。1回あたりの件数上限、スプールのサイズ上限と世代ローテーション、**空き容量の下限（既定512MiB）を下回ると収集を一時停止**（カーソルは進めない）があります。状態は `ok / gap / degraded / access_denied / channel_not_found / paused_low_disk / paused_spool_full` で、いずれも「イベントなし」とは区別します。
 - 状態は `%ProgramData%\AegisGuard\state.json` に毎回原子的に保存します。設定ファイル（`config.json`）が壊れていれば既定値で動き、そのことを状態に記録します。最終更新が間隔の3倍以上古い状態は「停止・不明」とみなします。
 
 ### デスクトップUI（P7、egui/eframe、読み取り専用）

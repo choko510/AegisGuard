@@ -580,7 +580,13 @@ fn run_fim(command: FimCommand) -> Result<()> {
     Ok(())
 }
 
-/// Tick work used by the service. Collection is added in P8-02.
+/// Tick work used by the service: continuous Event Log collection (P8-02).
+#[cfg(windows)]
+fn service_work() -> Box<dyn aegisguard::service::TickWork + Send> {
+    Box::new(aegisguard::service::collect::CollectionWork::windows())
+}
+
+#[cfg(not(windows))]
 fn service_work() -> Box<dyn aegisguard::service::TickWork + Send> {
     Box::new(aegisguard::service::NoWork)
 }

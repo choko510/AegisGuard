@@ -132,10 +132,21 @@ aegisguard rules rollback --trusted-key keys\maintainer.pub --store data\rules
 - 導入済みパックは2世代で保存します。`rollback` は前世代を再検証してから戻します（最大連番は保持するので、戻した後に古いパックを再導入することはできません）。
 - `scan` は読み込むたびに署名と期限を再検証し、期限切れや信頼しない鍵の場合は走査を始めずにエラーにします。
 - `yara` featureのないビルドではコンパイルを確認できないため、パックを導入できません。
+### Windowsイベントログの収集（P2-01、読み取りのみ）
+
+```powershell
+# 既定はSysmon（Microsoft公式から利用者が別途導入したもの）。AegisGuardはSysmonを同梱・設定変更しません
+aegisguard events collect --channel Microsoft-Windows-Sysmon/Operational --spool data\events\sysmon.jsonl --checkpoint data\events\sysmon.checkpoint.json
+```
+
+- Windows Event Log API（`EvtQuery`・`EvtNext`・`EvtRender`・ブックマーク）で指定チャネルを読み、`EventEnvelope v1` としてスプール（JSONL）に追記します。監査ポリシー・チャネル設定・Sysmon設定は変更しません。
+- **スプールをフラッシュした後にだけ**カーソル（ブックマーク）を2世代保存で進めます。途中で止まると次回に同じイベントを再読込します（`event_uid` が同じ重複は起こり得ますが、取りこぼしはしません）。
+- ブックマークの記録が消えた（ログが上書きされた）場合や `EventRecordID` が飛んだ場合は、`gaps` に記録して `status=gap` にします。未来のイベントだけに切り替えて黙って続けることはしません。チャネルが無い・権限がない場合は `status=degraded` で、終了コードは非0です。
+- 保存するのは許可リストのフィールドだけです（ProcessGuid・Image・宛先IP/ポート・DNS名・ハッシュ等）。`CommandLine` はSHA-256だけを保存し、ユーザー名や端末名は保存しません。
 
 ### 今後の本番機能
 
-Windowsサービス、Sysmonイベント1/3/7の購読とProcessGuid相関、AMSI連携、YARA-X、Authenticode、DNS/ドメインIOC、明示的なWindows Firewallアウトバウンド遮断と安全な巻き戻し、ログローテーション、署名付きルール更新、GUIなどを段階的に追加します。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。
+Windowsサービス、ProcessGuid相関、AMSI連携、Authenticode、DNS/ドメインIOC、明示的なWindows Firewallアウトバウンド遮断と安全な巻き戻し、ログローテーション、署名付きルール更新、GUIなどを段階的に追加します。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。
 
 ## 脅威フィード
 

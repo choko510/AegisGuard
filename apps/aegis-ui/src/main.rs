@@ -1,17 +1,19 @@
 //! AegisGuard desktop UI (read-only, runs as the normal user).
 //!
 //! Usage: `aegis-ui [--page home|scan|browser|realtime|network|history|settings]
-//! [--theme light|dark] [--screenshot out.png [--size 1280x800] [--scale 1.0]]`
+//! [--theme light|dark] [--open result.json ...] [--screenshot out.png [--size 1280x800] [--scale 1.0]]`
 //!
 //! `--screenshot` renders the chosen page, writes a PNG and exits; it is used
 //! to check layout, DPI scaling and Japanese text on a real machine.
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod app;
+mod data;
 mod fonts;
 mod png;
 mod status;
 mod theme;
+mod views;
 
 use app::{AegisApp, Page, ThemeChoice};
 use eframe::egui;
@@ -25,6 +27,7 @@ struct Options {
     screenshot: Option<PathBuf>,
     size: [f32; 2],
     scale: Option<f32>,
+    open: Vec<PathBuf>,
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -34,6 +37,7 @@ fn parse_args() -> Result<Options, String> {
         screenshot: None,
         size: [1180.0, 760.0],
         scale: None,
+        open: Vec::new(),
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -50,6 +54,7 @@ fn parse_args() -> Result<Options, String> {
                     other => return Err(format!("unknown theme {other}")),
                 }
             }
+            "--open" => o.open.push(PathBuf::from(value()?)),
             "--screenshot" => o.screenshot = Some(PathBuf::from(value()?)),
             "--size" => {
                 let v = value()?;
@@ -131,7 +136,10 @@ fn main() -> eframe::Result {
             .with_min_inner_size([640.0, 480.0]),
         ..Default::default()
     };
-    let app = AegisApp::new(options.page, options.theme);
+    let mut app = AegisApp::new(options.page, options.theme);
+    // Files named on the command line are loaded before the first frame
+    // (bounded and cancellable like drag and drop).
+    app.load_now(&options.open);
     eframe::run_native(
         "AegisGuard",
         native,

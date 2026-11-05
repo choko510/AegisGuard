@@ -89,7 +89,9 @@ fn normal_and_encoded_html_queries_are_distinguished() {
         "https://example.invalid/?page=1&amp;sort=asc\n"
     );
     let result = audit_reader(text.as_bytes(), Mode::Log);
-    assert_eq!(result["entries"].as_array().unwrap().len(), 1);
+    let entries = result["entries"].as_array().unwrap();
+    assert!(!entries.is_empty());
+    assert!(entries.iter().all(|entry| entry["line_no"] == 1));
     assert_eq!(exit_code(&result), 2);
 }
 

@@ -10,7 +10,7 @@ AegisGuard is an experimental defensive utility, not a replacement for Microsoft
 - C2 update performs HTTPS GET only to configured public sources. No local file contents or scans are uploaded.
 - C2 feed strings are parsed as IP literals. Neither the feed contents nor the sample contents are interpolated into shell commands.
 - There is no automatic firewall modification or process termination.
-- JSONL reports may contain sensitive local file paths. Keep them under appropriate ACLs and avoid uploading them unreviewed.
+- JSONL reports may contain sensitive local file paths. AegisGuard creates report and cache files readable by the owner only (Unix 0600; Windows protected DACL for owner, SYSTEM and Administrators). Files that already existed keep their ACLs. Avoid uploading reports unreviewed.
 
 ## Known limitations
 

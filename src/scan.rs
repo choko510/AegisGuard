@@ -1,9 +1,10 @@
 use crate::budget::{self, Budget};
+use crate::jsonl::JsonlLog;
 use crate::model::{Assessment, FileIdentity, Report};
 use crate::{fsafe, pe, script, Result};
 use sha2::{Digest, Sha256};
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 use walkdir::WalkDir;
@@ -260,22 +261,7 @@ fn stopped_report(root: &Path, reason: &'static str) -> Report {
     report
 }
 
-pub fn run(path: &Path, recursive: bool, output: Option<&Path>, limits: Limits) -> Result<()> {
-    let mut log: Option<File> = if let Some(destination) = output {
-        if let Some(parent) = destination.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
-        }
-        Some(
-            OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(destination)?,
-        )
-    } else {
-        None
-    };
+pub fn run(path: &Path, recursive: bool, mut log: Option<JsonlLog>, limits: Limits) -> Result<()> {
     // Ctrl-C finishes the current bounded unit, records the stop and exits.
     let _ = ctrlc::set_handler(budget::cancel);
     let mut summary = Summary::default();
@@ -331,12 +317,12 @@ fn print_summary(summary: &Summary) {
     );
 }
 
-fn emit(report: Report, log: &mut Option<File>, summary: &mut Summary) -> Result<()> {
+fn emit(report: Report, log: &mut Option<JsonlLog>, summary: &mut Summary) -> Result<()> {
     summary.count(&report);
     let line = serde_json::to_string(&report)?;
     println!("{line}");
-    if let Some(file) = log.as_mut() {
-        writeln!(file, "{line}")?;
+    if let Some(log) = log.as_mut() {
+        log.write_line(&line)?;
     }
     Ok(())
 }

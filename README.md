@@ -60,6 +60,9 @@ cargo run --release -- c2 status
 - C2キャッシュはバージョン2でフィード単位の `last_success_at` と48時間の期限を管理します。**更新に失敗したフィードの時刻は変更しません。**
 - `c2 status` の `feeds[].stale` を参照してください。`c2 check` は期限切れのIPを `matched=true` にせず、`stale_matches_ignored` に区別して表示します。
 - 古いバージョン1のキャッシュは保存済みの `collected_at` を保守的に引き継ぎます。古い情報を新規取得済みとみなしません。
+- C2キャッシュは2世代で保存します。新しい内容を `<cache>.tmp` に書いてフラッシュし、読み戻して検証してから、旧版を `<cache>.prev`、新版を `<cache>` にします。途中で停止・破損した場合は、次の読み込みで検証済みの新しい世代か旧世代を使い（`cache_generation` が `pending` / `previous` になり警告を表示）、次の `c2 update` で修復します。有効な世代が1つもない場合は、空のキャッシュとして扱わずエラーにします。
+- キャッシュとJSONL出力ファイルは作成時に所有者のみがアクセスできる権限にします（Unixは0600、Windowsは所有者・SYSTEM・Administratorsのみの保護されたDACL）。
+- `--output` のJSONLは `--output-max-bytes`（既定64 MiB）でローテーションし、`--output-generations`（既定5）世代まで残します。先頭行がAegisGuardのレポートでないファイルには追記・ローテーション・削除をせずエラーにします。途中で切れた最終行は改行で区切ってから追記します。
 - デフォルトでネットワークへファイルや解析結果を送信しません。`c2 update`を明示した場合のみ指定フィードへのHTTPS要求を行います。
 
 ### JSONLレポート（スキーマ v2）
@@ -94,7 +97,7 @@ cargo run --release -- c2 status
 | 走査時間 `--max-duration-secs` | 14400 | 同上（`scan_time_limit`） |
 | Ctrl-C | — | 処理中の単位を終えて `scan_cancelled` を記録し、終了コード非0 |
 
-走査は単一スレッドです。ZIP等のアーカイブ展開は実装していません。JSONL出力のサイズ上限とローテーションはP0-04で扱います。
+走査は単一スレッドです。ZIP等のアーカイブ展開は実装していません。
 
 ### 今後の本番機能
 

@@ -1,10 +1,12 @@
 mod budget;
 mod c2;
 mod fsafe;
+mod jsonl;
 mod model;
 mod pe;
 mod scan;
 mod script;
+mod store;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -34,6 +36,12 @@ enum Commands {
         /// Append reports to a local JSONL file; never uploads samples.
         #[arg(long)]
         output: Option<PathBuf>,
+        /// Rotate the --output file once it would exceed this size.
+        #[arg(long, default_value_t = 64 * 1024 * 1024)]
+        output_max_bytes: u64,
+        /// Rotated generations to keep (scan.jsonl.1 ...); 0 stops at the size limit.
+        #[arg(long, default_value_t = 5)]
+        output_generations: u32,
         /// Per-file analysis time budget; reaching it marks the file incomplete.
         #[arg(long, default_value_t = 10_000)]
         file_time_limit_ms: u64,
@@ -81,6 +89,8 @@ fn main() -> Result<()> {
             path,
             recursive,
             output,
+            output_max_bytes,
+            output_generations,
             file_time_limit_ms,
             max_files,
             max_total_bytes,
@@ -92,7 +102,10 @@ fn main() -> Result<()> {
                 max_total_bytes,
                 max_duration: Duration::from_secs(max_duration_secs),
             };
-            scan::run(&path, recursive, output.as_deref(), limits)?
+            let log = output
+                .map(|p| jsonl::JsonlLog::open(&p, output_max_bytes, output_generations))
+                .transpose()?;
+            scan::run(&path, recursive, log, limits)?
         }
         Commands::C2 { command } => match command {
             C2Command::Update { cache } => c2::update(&cache)?,

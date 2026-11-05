@@ -29,10 +29,12 @@ fn decode(bytes: &[u8]) -> Result<String, &'static str> {
         let little = bytes[0] == 0xff;
         let units: Vec<u16> = bytes[2..]
             .chunks_exact(2)
-            .map(|pair| if little {
-                u16::from_le_bytes([pair[0], pair[1]])
-            } else {
-                u16::from_be_bytes([pair[0], pair[1]])
+            .map(|pair| {
+                if little {
+                    u16::from_le_bytes([pair[0], pair[1]])
+                } else {
+                    u16::from_be_bytes([pair[0], pair[1]])
+                }
             })
             .collect();
         return String::from_utf16(&units).map_err(|_| "malformed_utf16");

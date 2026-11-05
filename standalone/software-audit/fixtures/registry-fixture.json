@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "hklm64",
+      "status": "complete",
+      "entries": [
+        {
+          "name": "Example Widget",
+          "version": "1.9",
+          "publisher": "Example Labs",
+          "architecture": "x64",
+          "edition": "Pro"
+        },
+        {
+          "name": "Example Widget Plus",
+          "version": "1.9",
+          "publisher": "Example Labs"
+        }
+      ]
+    },
+    {
+      "id": "hklm32",
+      "status": "complete",
+      "entries": []
+    },
+    {
+      "id": "hkcu64",
+      "status": "complete",
+      "entries": []
+    },
+    {
+      "id": "hkcu32",
+      "status": "complete",
+      "entries": []
+    }
+  ]
+}

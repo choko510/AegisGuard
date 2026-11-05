@@ -1,0 +1,11 @@
+[package]
+name = "software-audit"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Read-only offline Windows installed-software inventory and conservative local advisory matching"
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"

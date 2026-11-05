@@ -237,6 +237,7 @@ fn scenario(seed: u64, name: &str, ordinal: usize) -> LabResult<(Vec<Event>, Vec
             ev(&mut es, serial, 1, 1, &a, 1001, &[("Image", helper)]);
             ev(&mut es, serial, 12, 2, &a, 1001, &[("Image", helper), ("EventType", "CreateKey"), ("TargetObject", reg)]);
             ev(&mut es, serial, 13, 3, &a, 1001, &[("Image", helper), ("EventType", "SetValue"), ("TargetObject", reg), ("Details", path)]);
+            ev(&mut es, serial, 14, 4, &a, 1001, &[("Image", helper), ("EventType", "RenameKey"), ("TargetObject", r"HKLM\Software\LabTools\OldName")]);
             expected = vec![expectation("AG-B002", "absent", &es, &[])];
             note = "Machine-wide COM registration in a protected installation directory".into();
         }
@@ -254,6 +255,8 @@ fn scenario(seed: u64, name: &str, ordinal: usize) -> LabResult<(Vec<Event>, Vec
                 es.push(es[1].clone()); // duplicate delivery of the image load
             }
             if name == "missing-log" {
+                // A real missing record is represented by a gap, not merely by absence of an ID 11.
+                for event in es.iter_mut().skip(1) { event.record += 1; }
                 missing.push("sysmon_file_create".into());
                 expected = vec![
                     expectation("AG-B002", "present", &es, &[1]),
@@ -330,7 +333,7 @@ fn read_bounded(path: &Path, cap: u64) -> LabResult<Vec<u8>> {
     if !meta.is_file() || meta.file_type().is_symlink() || is_reparse(&meta) || meta.len() > cap {
         return Err("input is not a regular, non-link, bounded file".into());
     }
-    let mut input = File::open(path).map_err(|e| format!("cannot read input: {:?}", e.kind()))?;
+    let input = File::open(path).map_err(|e| format!("cannot read input: {:?}", e.kind()))?;
     let mut bytes = Vec::new();
     input.take(cap + 1).read_to_end(&mut bytes).map_err(|e| format!("input read failed: {:?}", e.kind()))?;
     if bytes.len() as u64 > cap {
@@ -477,6 +480,8 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
     let mut num = 0usize;
     let mut errors = Vec::new();
     for case in &manifest.cases {
+        let mut event_uids = BTreeSet::new();
+        let mut event_lines = 0usize;
         if started.elapsed() > LIMIT { return Err("verification time budget exceeded".into()); }
         let mut all = case.xml.clone();
         all.push(case.events.clone());
@@ -493,7 +498,11 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
                         if line.len() > MAX_LINE { errors.push("oversized JSONL line".into()); break; }
                         match serde_json::from_slice::<Value>(line) {
                             Ok(v) if v["schema_version"] == 1 && v["event_uid"].as_str().is_some()
-                                && v["source"] == PROVIDER => { num += 1; }
+                                && v["source"] == PROVIDER => {
+                                    num += 1;
+                                    event_lines += 1;
+                                    if let Some(uid) = v["event_uid"].as_str() { event_uids.insert(uid.to_owned()); }
+                                }
                             _ => errors.push("malformed or incompatible event JSONL".into()),
                         }
                     }
@@ -501,6 +510,12 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
                 Ok(_) => {}
                 Err(e) => errors.push(e),
             }
+        }
+        if event_lines != case.xml.len() {
+            errors.push(format!("event/XML count mismatch in {}",case.case_id));
+        }
+        if case.expected.iter().flat_map(|e| e.event_refs.iter()).any(|uid| !event_uids.contains(uid)) {
+            errors.push(format!("unresolved expected event reference in {}",case.case_id));
         }
     }
     if num > MAX_CASES * MAX_EVENTS { errors.push("too many event lines".into()); }
@@ -542,13 +557,13 @@ pub fn summarize(expected: &Path, actual: &Path) -> LabResult<Value> {
                 "unknown" => { unknown += 1; "unknown" }
                 _ => {
                     let evaluable = report.and_then(|v| v["rules"].as_array()).and_then(|rs| {
-                        rs.iter().find(|r| r["rule_id"] == rule.rule_id)
+                        rs.iter().find(|r| r["rule_id"].as_str() == Some(rule.rule_id.as_str()))
                     }).and_then(|r| r["evaluable"].as_bool());
                     if evaluable != Some(true) { unknown += 1; "unknown" }
                     else {
                         let found = report.and_then(|v| v["findings"].as_array()).is_some_and(|fs| {
                             fs.iter().any(|f| {
-                                if f["rule_id"] != rule.rule_id { return false; }
+                                if f["rule_id"].as_str() != Some(rule.rule_id.as_str()) { return false; }
                                 let refs = f["event_refs"].as_array();
                                 rule.event_refs.iter().all(|id| {
                                     refs.is_some_and(|arr| arr.iter().any(|x| x.as_str() == Some(id)))

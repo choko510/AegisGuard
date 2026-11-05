@@ -503,12 +503,18 @@ pub fn inspect(data: &[u8], report: &mut Report) {
     let root = match decode_text(data) {
         Some(text) => text,
         None => {
-            report.unavailable("unreadable", "Cannot decode script text");
+            report.unavailable(
+                "unreadable",
+                "text_decode_failed",
+                "Cannot decode script text",
+            );
             return;
         }
     };
     let path = report.path.to_ascii_lowercase();
     let is_batch = path.ends_with(".bat") || path.ends_with(".cmd");
+    report.analyzer("script_signatures");
+    report.analyzer("script_deobfuscation");
     let mut queue = VecDeque::from([Layer {
         text: root,
         origin: "raw".into(),

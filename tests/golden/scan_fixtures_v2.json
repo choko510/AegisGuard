@@ -1,0 +1,158 @@
+[
+  {
+    "analysis_complete": false,
+    "assessment": "incomplete",
+    "completed_at_unix_ms": "<volatile>",
+    "coverage": {
+      "analyzers": [
+        "script_signatures",
+        "script_deobfuscation"
+      ],
+      "bytes_read": 568,
+      "size_limit_bytes": 4194304
+    },
+    "decoded_layers": 0,
+    "engine": {
+      "name": "aegisguard-static",
+      "ruleset": "builtin-static-1",
+      "version": "0.1.0"
+    },
+    "file_identity": {
+      "modified_unix_ms": "<volatile>",
+      "observed_via": "handle_metadata",
+      "size_bytes": 568
+    },
+    "incomplete_reasons": [
+      "batch_assignment_count_limit"
+    ],
+    "kind": "script",
+    "not_assessed_reason": null,
+    "path": "tests/fixtures/scan/assignment_limit.bat",
+    "risk": "incomplete",
+    "schema_version": 2,
+    "score": 0,
+    "sha256": "69ef20dc98966f0691116c011d246bd0411eb25ddb6f0c2487be0b54d2ef0c72",
+    "signal_level": "low_signal",
+    "signals": [],
+    "started_at_unix_ms": "<volatile>",
+    "status": "incomplete",
+    "warning": "Deobfuscation was incomplete; undetected behavior is possible"
+  },
+  {
+    "analysis_complete": true,
+    "assessment": "analyzed",
+    "completed_at_unix_ms": "<volatile>",
+    "coverage": {
+      "analyzers": [
+        "script_signatures",
+        "script_deobfuscation"
+      ],
+      "bytes_read": 21,
+      "size_limit_bytes": 4194304
+    },
+    "decoded_layers": 0,
+    "engine": {
+      "name": "aegisguard-static",
+      "ruleset": "builtin-static-1",
+      "version": "0.1.0"
+    },
+    "file_identity": {
+      "modified_unix_ms": "<volatile>",
+      "observed_via": "handle_metadata",
+      "size_bytes": 21
+    },
+    "incomplete_reasons": [],
+    "kind": "script",
+    "not_assessed_reason": null,
+    "path": "tests/fixtures/scan/benign.py",
+    "risk": "low_signal",
+    "schema_version": 2,
+    "score": 0,
+    "sha256": "4660ab1ff310887b8f4727933f68eeb74012a5fbc7107d500b146796f0d95b6b",
+    "signal_level": "low_signal",
+    "signals": [],
+    "started_at_unix_ms": "<volatile>",
+    "status": "analyzed",
+    "warning": null
+  },
+  {
+    "analysis_complete": true,
+    "assessment": "analyzed",
+    "completed_at_unix_ms": "<volatile>",
+    "coverage": {
+      "analyzers": [
+        "script_signatures",
+        "script_deobfuscation"
+      ],
+      "bytes_read": 286,
+      "size_limit_bytes": 4194304
+    },
+    "decoded_layers": 0,
+    "engine": {
+      "name": "aegisguard-static",
+      "ruleset": "builtin-static-1",
+      "version": "0.1.0"
+    },
+    "file_identity": {
+      "modified_unix_ms": "<volatile>",
+      "observed_via": "handle_metadata",
+      "size_bytes": 286
+    },
+    "incomplete_reasons": [],
+    "kind": "script",
+    "not_assessed_reason": null,
+    "path": "tests/fixtures/scan/credential_reference.py",
+    "risk": "high",
+    "schema_version": 2,
+    "score": 75,
+    "sha256": "125c0867133dbd07b47f772a285db3a2f317f24fb1b0f39acd669bea28cd598a",
+    "signal_level": "high",
+    "signals": [
+      {
+        "code": "possible_exfiltration",
+        "reason": "Browser credential references combined with an outbound send capability",
+        "severity": 75,
+        "source": "raw"
+      }
+    ],
+    "started_at_unix_ms": "<volatile>",
+    "status": "analyzed",
+    "warning": null
+  },
+  {
+    "analysis_complete": false,
+    "assessment": "not_assessed",
+    "completed_at_unix_ms": "<volatile>",
+    "coverage": {
+      "analyzers": [
+        "pe_header"
+      ],
+      "bytes_read": 2,
+      "size_limit_bytes": 67108864
+    },
+    "decoded_layers": 0,
+    "engine": {
+      "name": "aegisguard-static",
+      "ruleset": "builtin-static-1",
+      "version": "0.1.0"
+    },
+    "file_identity": {
+      "modified_unix_ms": "<volatile>",
+      "observed_via": "handle_metadata",
+      "size_bytes": 2
+    },
+    "incomplete_reasons": [],
+    "kind": "pe",
+    "not_assessed_reason": "malformed_pe",
+    "path": "tests/fixtures/scan/truncated.exe",
+    "risk": "not_assessed",
+    "schema_version": 2,
+    "score": 0,
+    "sha256": "9b8db510ef42b8ed54a3712636fda55a4f8cfcd5493e20b74ab00cd4f3979f2d",
+    "signal_level": "not_evaluated",
+    "signals": [],
+    "started_at_unix_ms": "<volatile>",
+    "status": "invalid_pe",
+    "warning": "Truncated DOS header"
+  }
+]

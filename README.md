@@ -62,6 +62,26 @@ cargo run --release -- c2 status
 - 古いバージョン1のキャッシュは保存済みの `collected_at` を保守的に引き継ぎます。古い情報を新規取得済みとみなしません。
 - デフォルトでネットワークへファイルや解析結果を送信しません。`c2 update`を明示した場合のみ指定フィードへのHTTPS要求を行います。
 
+### JSONLレポート（スキーマ v2）
+
+`scan` は1行1ファイルのJSONを出力します。v1（`schema_version` なし）の全フィールドは名前・型・意味を変えずに残し、v2はフィールドを**追加のみ**しています。読み手は未知のフィールドを無視してください。
+
+| フィールド | 用途 |
+| --- | --- |
+| `schema_version` | `2`。互換性のない変更をする場合だけ増やします |
+| `assessment` | **完全性の軸**：`analyzed` / `incomplete` / `not_assessed`。`analysis_complete` は `assessment == "analyzed"` と常に一致します |
+| `signal_level` | **検出の軸**：`low_signal` / `review` / `high` / `not_evaluated`（未検査かつ検出なし）。完全性とは独立に、見つかった根拠の強さだけを表します |
+| `not_assessed_reason` | 未検査の理由コード（例：`unsupported_file_type`、`metadata_failed`、`symlink_not_followed`、`not_regular_file`、`size_limit_exceeded`、`open_failed`、`read_failed`、`file_grew_during_read`、`malformed_pe`、`text_decode_failed`、`walk_failed`）。`status` は従来値のまま残ります |
+| `coverage` | 実際に読んだバイト数、適用したサイズ上限、実行した解析器。到達できなかった範囲は `incomplete_reasons` / `not_assessed_reason` に出ます |
+| `file_identity` | サイズと更新時刻、および取得元（`path_metadata` か開いたハンドルの `handle_metadata`）。**TOCTOU対策済みの同一性ではありません**（P0-02で対応予定） |
+| `engine` | エンジン名・バージョンと組み込みルールセットID（ルール変更時に更新） |
+| `started_at_unix_ms` / `completed_at_unix_ms` | 検査の開始・終了時刻（UNIXミリ秒） |
+
+- 従来の `risk` は2つの軸から導出され、`low_signal` になるのは `assessment=analyzed` の場合だけです。
+- フォルダー列挙に失敗したエントリと、検査対象拡張子のシンボリックリンクも `not_assessed` の行として出力します（以前は標準エラーのみ、またはスキップ）。列挙失敗の行は `kind=unknown` になる場合があります。
+- 標準エラーに `analyzed / incomplete / not_assessed` の件数サマリーを出します。
+- レポートに検体の本文、復号結果、一致した文字列は含めません。ローカルパスは含むため、取り扱いに注意してください。
+
 ### 今後の本番機能
 
 Windowsサービス、Sysmonイベント1/3/7の購読とProcessGuid相関、AMSI連携、YARA-X、Authenticode、DNS/ドメインIOC、明示的なWindows Firewallアウトバウンド遮断と安全な巻き戻し、ログローテーション、署名付きルール更新、GUIなどを段階的に追加します。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。

@@ -213,3 +213,16 @@ fn stale_ioc_is_explicitly_expired_and_future_rules_remain_planned() {
     fs::write(&actual, b"{\"rules\":[],\"findings\":[]}\n").unwrap();
     assert_eq!(summarize(&a.join("manifest.json"), &actual).unwrap()["status"], "partial");
 }
+
+#[test]
+fn a_valid_json_object_without_final_newline_is_incomplete() {
+    let temp = Temporary::new();
+    let a = create(&temp, "case", 42, "benign-com");
+    let actual = temp.path().join("actual.jsonl");
+    fs::write(&actual, b"{\"case_id\":\"benign-com\",\"rules\":[],\"findings\":[]}").unwrap();
+    assert!(summarize(&a.join("manifest.json"), &actual).is_err());
+    fs::write(&actual, b"{\"case_id\":\"benign-com\",\"rules\":[],\"findings\":[]}\n\n").unwrap();
+    assert!(summarize(&a.join("manifest.json"), &actual).is_err());
+    fs::write(&actual, b"{\"ruleset_version\":999,\"case_id\":\"benign-com\",\"rules\":[],\"findings\":[]}\n").unwrap();
+    assert!(summarize(&a.join("manifest.json"), &actual).is_err());
+}

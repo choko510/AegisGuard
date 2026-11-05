@@ -606,7 +606,7 @@ pub fn audit_reader<R: BufRead>(mut reader: R, mode: Mode) -> Value {
         }
         lines_read += 1;
         let line = match std::str::from_utf8(&line) {
-            Ok(line) => line.trim_end_matches(|c| c == '\n' || c == '\r'),
+            Ok(line) => line.trim_end_matches(['\n', '\r']),
             Err(_) => {
                 return failure("invalid_utf8", inspected, lines_read, bytes_read, mode);
             }
@@ -784,7 +784,7 @@ mod tests {
         let clean_result = audit_reader(clean.as_bytes(), Mode::Jsonl);
         assert_eq!(exit_code(&clean_result), 0);
         let header_masks = audit_reader(
-            br#"{"Authorization":"Bearer [REDACTED]","Cookie":"sid=***"}"#,
+            &br#"{"Authorization":"Bearer [REDACTED]","Cookie":"sid=***"}"#[..],
             Mode::Jsonl,
         );
         assert_eq!(exit_code(&header_masks), 0);

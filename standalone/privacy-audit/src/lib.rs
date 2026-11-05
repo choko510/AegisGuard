@@ -165,11 +165,15 @@ fn rules() -> &'static Vec<Rule> {
 }
 
 fn is_masked(text: &str) -> bool {
-    let mut t = text.trim().trim_matches(|c| c == '"' || c == '\'' || c == ' ');
+    let mut t = text
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'' || c == ' ');
     // Masked header values commonly retain a "Bearer " or "sid=" prefix.
     // Limit peeling to three levels to avoid adversarial recursion.
     for _ in 0..3 {
-        if t.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("bearer ")) {
+        if t.get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("bearer "))
+        {
             t = &t[7..];
         } else if let Some((name, value)) = t.split_once('=') {
             if !name.is_empty()
@@ -189,8 +193,18 @@ fn is_masked(text: &str) -> bool {
     t.is_empty()
         || matches!(
             lower.as_str(),
-            "redacted" | "[redacted]" | "<redacted>" | "[masked]" | "<masked>"
-                | "masked" | "[hidden]" | "null" | "none" | "n/a" | "unknown" | "-"
+            "redacted"
+                | "[redacted]"
+                | "<redacted>"
+                | "[masked]"
+                | "<masked>"
+                | "masked"
+                | "[hidden]"
+                | "null"
+                | "none"
+                | "n/a"
+                | "unknown"
+                | "-"
         )
         || (t.len() >= 3 && t.bytes().all(|b| b == b'*' || b == b'x' || b == b'X'))
 }
@@ -244,11 +258,9 @@ fn sensitive_field(key: &str) -> Option<(&'static str, &'static str, &'static st
         .flat_map(char::to_lowercase)
         .collect();
     match canonical.as_str() {
-        "authorization" | "bearertoken" | "accesstoken" | "refreshtoken" | "idtoken"
-        | "apikey" | "clientsecret" | "password" | "passwd" | "pwd" | "secret"
-        | "token" | "credential" | "credentials" | "privatekey" => {
-            Some(("credential", "high", "structured_secret_field"))
-        }
+        "authorization" | "bearertoken" | "accesstoken" | "refreshtoken" | "idtoken" | "apikey"
+        | "clientsecret" | "password" | "passwd" | "pwd" | "secret" | "token" | "credential"
+        | "credentials" | "privatekey" => Some(("credential", "high", "structured_secret_field")),
         "cookie" | "setcookie" | "browserpassword" => {
             Some(("browser_credential", "high", "structured_browser_secret"))
         }
@@ -265,12 +277,20 @@ fn sensitive_field(key: &str) -> Option<(&'static str, &'static str, &'static st
 fn safe_account(account: &str) -> bool {
     matches!(
         account.to_ascii_lowercase().as_str(),
-        "public" | "default" | "default user" | "defaultuser0" | "system"
-            | "shared" | "allusers" | "all users" | "administrator"
-            | "username" | "yourname" | "user"
+        "public"
+            | "default"
+            | "default user"
+            | "defaultuser0"
+            | "system"
+            | "shared"
+            | "allusers"
+            | "all users"
+            | "administrator"
+            | "username"
+            | "yourname"
+            | "user"
     )
 }
-
 
 // JSON maps must not silently drop an earlier value on duplicate keys.
 // The normal serde_json::Value representation keeps the last key. Fail
@@ -308,24 +328,42 @@ impl<'de> Visitor<'de> for UniqueKeysVisitor {
         Ok(UniqueKeys)
     }
 
-    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> { Ok(UniqueKeys) }
-    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> { Ok(UniqueKeys) }
-    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> { Ok(UniqueKeys) }
-    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> { Ok(UniqueKeys) }
-    fn visit_str<E: de::Error>(self, _: &str) -> Result<Self::Value, E> { Ok(UniqueKeys) }
-    fn visit_string<E: de::Error>(self, _: String) -> Result<Self::Value, E> { Ok(UniqueKeys) }
-    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(UniqueKeys) }
-    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(UniqueKeys) }
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_str<E: de::Error>(self, _: &str) -> Result<Self::Value, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_string<E: de::Error>(self, _: String) -> Result<Self::Value, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(UniqueKeys)
+    }
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(UniqueKeys)
+    }
 }
 
 fn reject_duplicate_json_keys(line: &str) -> Result<(), &'static str> {
-    serde_json::from_str::<UniqueKeys>(line).map(|_| ()).map_err(|e| {
-        if e.to_string().contains("duplicate_json_key") {
-            "duplicate_json_key"
-        } else {
-            "malformed_json"
-        }
-    })
+    serde_json::from_str::<UniqueKeys>(line)
+        .map(|_| ())
+        .map_err(|e| {
+            if e.to_string().contains("duplicate_json_key") {
+                "duplicate_json_key"
+            } else {
+                "malformed_json"
+            }
+        })
 }
 
 struct Inspector {
@@ -453,12 +491,7 @@ impl Inspector {
         Ok(())
     }
 
-    fn inspect_line(
-        &mut self,
-        line: &str,
-        line_no: usize,
-        mode: Mode,
-    ) -> Result<(), &'static str> {
+    fn inspect_line(&mut self, line: &str, line_no: usize, mode: Mode) -> Result<(), &'static str> {
         if self.started.elapsed() > MAX_DURATION {
             return Err("time_limit_exceeded");
         }
@@ -468,14 +501,16 @@ impl Inspector {
         let json = match mode {
             Mode::Jsonl => true,
             Mode::Log => false,
-            Mode::Auto => matches!(line.trim_start().as_bytes().first(), Some(b'{') | Some(b'[')),
+            Mode::Auto => matches!(
+                line.trim_start().as_bytes().first(),
+                Some(b'{') | Some(b'[')
+            ),
         };
         if json {
             // Duplicate keys (including Unicode-escaped aliases) must not hide
             // an earlier sensitive value in serde_json::Value's last-wins map.
             reject_duplicate_json_keys(line)?;
-            let parsed: Value =
-                serde_json::from_str(line).map_err(|_| "malformed_json")?;
+            let parsed: Value = serde_json::from_str(line).map_err(|_| "malformed_json")?;
             if !parsed.is_object() && !parsed.is_array() {
                 return Err("json_top_level_not_container");
             }
@@ -486,7 +521,10 @@ impl Inspector {
             self.visit_json(&parsed, None, 0, line_no)?;
         } else {
             self.lines_log += 1;
-            if line.split_whitespace().any(|token| token.len() > MAX_TOKEN_BYTES) {
+            if line
+                .split_whitespace()
+                .any(|token| token.len() > MAX_TOKEN_BYTES)
+            {
                 return Err("token_limit_exceeded");
             }
             self.scan_text(line, line_no)?;
@@ -558,7 +596,14 @@ fn failure(
     } else {
         "error"
     };
-    report(status, Some(reason), inspected, lines_read, bytes_read, mode)
+    report(
+        status,
+        Some(reason),
+        inspected,
+        lines_read,
+        bytes_read,
+        mode,
+    )
 }
 
 /// Public in-memory path used by the synthetic tests; never writes the input.
@@ -568,7 +613,13 @@ pub fn audit_reader<R: BufRead>(mut reader: R, mode: Mode) -> Value {
     let mut lines_read = 0usize;
     loop {
         if inspected.started.elapsed() > MAX_DURATION {
-            return failure("time_limit_exceeded", inspected, lines_read, bytes_read, mode);
+            return failure(
+                "time_limit_exceeded",
+                inspected,
+                lines_read,
+                bytes_read,
+                mode,
+            );
         }
         let mut line = Vec::new();
         let count = {
@@ -596,13 +647,31 @@ pub fn audit_reader<R: BufRead>(mut reader: R, mode: Mode) -> Value {
         }
         bytes_read = bytes_read.saturating_add(count as u64);
         if bytes_read > MAX_FILE_BYTES {
-            return failure("file_limit_exceeded", inspected, lines_read, bytes_read, mode);
+            return failure(
+                "file_limit_exceeded",
+                inspected,
+                lines_read,
+                bytes_read,
+                mode,
+            );
         }
         if count > MAX_LINE_BYTES {
-            return failure("line_limit_exceeded", inspected, lines_read, bytes_read, mode);
+            return failure(
+                "line_limit_exceeded",
+                inspected,
+                lines_read,
+                bytes_read,
+                mode,
+            );
         }
         if lines_read >= MAX_LINES {
-            return failure("line_count_limit_exceeded", inspected, lines_read, bytes_read, mode);
+            return failure(
+                "line_count_limit_exceeded",
+                inspected,
+                lines_read,
+                bytes_read,
+                mode,
+            );
         }
         lines_read += 1;
         let line = match std::str::from_utf8(&line) {
@@ -681,7 +750,10 @@ pub fn audit_path(path: &Path, mode: Mode) -> Value {
 pub fn exit_code(output: &Value) -> i32 {
     if output["status"] != "complete" {
         3
-    } else if output["entries"].as_array().is_some_and(|items| !items.is_empty()) {
+    } else if output["entries"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
         2
     } else {
         0
@@ -743,13 +815,18 @@ mod tests {
     #[test]
     fn no_raw_values_or_local_paths_in_findings() {
         let secret = "syntheticSECRET12345";
-        let input = format!("{{\"token\":\"{secret}\",\"path\":\"C:\\\\Users\\\\real-looking-name\\\\a\"}}");
+        let input = format!(
+            "{{\"token\":\"{secret}\",\"path\":\"C:\\\\Users\\\\real-looking-name\\\\a\"}}"
+        );
         let result = audit_reader(input.as_bytes(), Mode::Jsonl);
         let encoded = result.to_string();
         assert!(!encoded.contains(secret));
         assert!(!encoded.contains("real-looking-name"));
         assert!(!encoded.contains("C:\\"));
-        assert_eq!(result["entries"][0]["redacted_excerpt_or_hash"], "[REDACTED]");
+        assert_eq!(
+            result["entries"][0]["redacted_excerpt_or_hash"],
+            "[REDACTED]"
+        );
     }
 
     #[test]

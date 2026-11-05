@@ -4,6 +4,7 @@ use driver_inventory::{count_multisz_units, next_page, normalize_image_path, Col
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::AsRawHandle;
 use std::ptr::null;
 use std::time::Instant;
 
@@ -191,7 +192,7 @@ pub fn windows_directory() -> Result<String, &'static str> {
     String::from_utf16(&buffer[..len]).map_err(|_| "windows_directory_invalid")
 }
 
-pub fn collect(drivers_only: bool) -> Collection {
+pub fn collect(drivers_only: bool, started: Instant) -> Collection {
     let mut result = Collection { services: Vec::new(),
         enumeration_status: "unavailable", error_code: None, pages: 0 };
     // SAFETY: Null machine/database means local active SCM; read-only access.
@@ -204,13 +205,12 @@ pub fn collect(drivers_only: bool) -> Collection {
         return result;
     }
     let _manager_handle = OwnedHandle(manager);
-    let began = Instant::now();
     let mut resume = 0u32;
     let mut seen = std::collections::HashSet::new();
     // Use a fixed 256-KiB page with alignment suitable for the C struct.
     let mut mem = vec![0u64; ENUM_BUFFER / 8];
     for page in 0..MAX_ENUM_PAGES {
-        if began.elapsed().as_millis() > MAX_DURATION_MS {
+        if started.elapsed().as_millis() > MAX_DURATION_MS {
             result.enumeration_status = "partial";
             result.error_code = Some("time_limit");
             return result;
@@ -287,8 +287,7 @@ pub fn collect(drivers_only: bool) -> Collection {
     result
 }
 
-pub fn enrich(collection: &mut Collection, windows_dir: &str, verify_signatures: bool) {
-    let started = Instant::now();
+pub fn enrich(collection: &mut Collection, windows_dir: &str, verify_signatures: bool, started: Instant) {
     if verify_signatures && collection.services.len() > 256 {
         collection.enumeration_status = "partial";
         collection.error_code = Some("signature_count_limit");
@@ -346,9 +345,16 @@ extern "system" {
     fn WinVerifyTrust(window: Handle, action: *const Guid, data: *mut WintrustData) -> i32;
 }
 fn verify_embedded_signature(path: &str) -> &'static str {
+    // Keep the checked file open while WinVerifyTrust evaluates it. Some
+    // providers may still resolve the path; this is not a complete TOCTOU
+    // guarantee (notably for parent-directory reparse races).
+    let opened = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return "unknown",
+    };
     let wide_path = wide(path);
     let mut file = WintrustFileInfo { size: size_of::<WintrustFileInfo>() as u32,
-        filename: wide_path.as_ptr(), file_handle: std::ptr::null_mut(),
+        filename: wide_path.as_ptr(), file_handle: opened.as_raw_handle(),
         known_subject: null() };
     let mut data = WintrustData {
         size: size_of::<WintrustData>() as u32,

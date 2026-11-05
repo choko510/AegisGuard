@@ -734,7 +734,7 @@ mod tests {
         );
         assert_eq!(json["status"], "complete");
         assert_eq!(json["coverage"]["json_lines"], 1);
-        assert!(json["entries"].as_array().unwrap().len() >= 1);
+        assert!(!json["entries"].as_array().unwrap().is_empty());
         let log = audit_reader(&b"Authorization: Bearer syntheticTEST12345\n"[..], Mode::Log);
         assert_eq!(log["coverage"]["log_lines"], 1);
         assert_eq!(exit_code(&log), 2);

@@ -157,6 +157,9 @@ pub struct Report {
     pub engine: Engine,
     /// YARA evidence; absent (null) when YARA was not requested.
     pub yara: Option<YaraSummary>,
+    /// PE structure and Authenticode (P5-04); null for scripts and for PE
+    /// files whose headers could not be read.
+    pub pe: Option<crate::pe::PeSummary>,
     pub started_at_unix_ms: u64,
     pub completed_at_unix_ms: u64,
 }
@@ -182,6 +185,7 @@ impl Report {
             coverage: Coverage::default(),
             file_identity: None,
             yara: None,
+            pe: None,
             engine: Engine {
                 name: "aegisguard-static",
                 version: env!("CARGO_PKG_VERSION"),

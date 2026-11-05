@@ -190,6 +190,22 @@ pub fn scan_file(path: &Path, time_limit: Duration, engines: Engines) -> Report 
     }
     if kind == "pe" {
         pe::inspect(&data, &mut report, &budget);
+        if report.pe.is_some() {
+            // Verified through the same handle, so the checked bytes are the
+            // scanned bytes.
+            let a = crate::authenticode::verify(&file, path);
+            if a.status == crate::authenticode::SignatureStatus::Invalid {
+                report.add(
+                    "invalid_signature",
+                    35,
+                    "authenticode",
+                    "The file carries an Authenticode signature that does not verify (modified or revoked)",
+                );
+            }
+            if let Some(summary) = report.pe.as_mut() {
+                summary.authenticode = Some(a);
+            }
+        }
     } else {
         script::inspect_layers(&data, &mut report, &budget, &mut |_r, _layer, _text| {
             #[cfg(feature = "yara")]

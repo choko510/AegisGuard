@@ -94,6 +94,8 @@ pub struct DllCandidate {
     pub signal_level: Option<model::SignalLevel>,
     pub signals: Vec<&'static str>,
     pub size_bytes: Option<u64>,
+    /// Authenticode result (Windows); a valid signature is not proof of safety.
+    pub signature: Option<crate::authenticode::Authenticode>,
     /// True when an HKCU registration's path names this file.
     pub registered_in_hkcu: bool,
 }
@@ -175,16 +177,14 @@ fn summarize_dll(path: &Path) -> DllCandidate {
         signal_level: Some(report.signal_level),
         signals: report.signals.iter().map(|s| s.code).collect(),
         size_bytes: report.file_identity.as_ref().map(|i| i.size_bytes),
+        signature: report.pe.as_ref().and_then(|p| p.authenticode.clone()),
         registered_in_hkcu: false,
     }
 }
 
 /// Run the check. `local_app_data` is the user's `%LOCALAPPDATA%`.
 pub fn check_k2f(local_app_data: Option<&Path>, registry: &dyn ComRegistry) -> K2fReport {
-    let mut not_assessed = vec![
-        "other_user_profiles_and_hives".to_string(),
-        "authenticode_signature (P5-04)".to_string(),
-    ];
+    let mut not_assessed = vec!["other_user_profiles_and_hives".to_string()];
     let helper_dir: PathBuf = local_app_data
         .map(|l| {
             l.join("Google")
@@ -255,6 +255,7 @@ pub fn check_k2f(local_app_data: Option<&Path>, registry: &dyn ComRegistry) -> K
                                 signal_level: None,
                                 signals: Vec::new(),
                                 size_bytes: None,
+                                signature: None,
                                 registered_in_hkcu: false,
                             }),
                             Ok(_) => dll_candidates.push(summarize_dll(&dll)),

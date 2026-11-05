@@ -104,6 +104,9 @@ pub struct ScanReportV2 {
     pub yara: Option<Value>,
     #[serde(default)]
     pub file_identity: Option<Value>,
+    /// PE structure and Authenticode (P5-04).
+    #[serde(default)]
+    pub pe: Option<Value>,
     #[serde(default)]
     pub started_at_unix_ms: Option<u64>,
     #[serde(default)]

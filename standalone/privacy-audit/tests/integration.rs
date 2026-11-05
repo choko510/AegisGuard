@@ -137,3 +137,47 @@ fn symlink_is_not_followed() {
     fs::remove_file(link).unwrap();
     fs::remove_file(target).unwrap();
 }
+
+
+#[test]
+fn secret_arrays_and_nested_objects_inherit_sensitive_parent() {
+    for input in [
+        r#"{"access_token":["synthetic$ABC12345"]}"#,
+        r#"[{"access_token":["synthetic$ABC12345"]}]"#,
+        r#"{"password":{"nested":{"values":["synthetic$ABC12345"]}}}"#,
+        r#"{"Cookie":[{"payload":"synthetic$ABC12345"}]}"#,
+    ] {
+        let result = audit_reader(input.as_bytes(), Mode::Auto);
+        assert_eq!(result["status"], "complete", "{input}");
+        assert!(
+            result["entries"].as_array().is_some_and(|v| !v.is_empty()),
+            "secret not detected in {input}"
+        );
+        assert_eq!(exit_code(&result), 2);
+        assert!(!result.to_string().contains("synthetic$ABC12345"));
+    }
+}
+
+#[test]
+fn duplicate_json_keys_fail_closed_even_with_unicode_escapes() {
+    for input in [
+        r#"{"password":"synthetic$ABC12345","password":"[REDACTED]"}"#,
+        r#"{"password":"synthetic$ABC12345","pass\u0077ord":"[REDACTED]"}"#,
+        r#"{"outer":{"token":"synthetic$ABC12345","token":null}}"#,
+        r#"[{"key":"a","key":"b"}]"#,
+    ] {
+        let result = audit_reader(input.as_bytes(), Mode::Auto);
+        assert_ne!(result["status"], "complete", "{input}");
+        assert_eq!(result["warnings"][0], "duplicate_json_key");
+        assert_eq!(exit_code(&result), 3);
+        assert!(!result.to_string().contains("synthetic$ABC12345"));
+    }
+}
+
+#[test]
+fn ordinary_json_arrays_remain_clean_when_no_secrets_exist() {
+    let output = audit_reader(br#"[{"items":["hello","world"]},{"ok":true}]"#, Mode::Auto);
+    assert_eq!(output["status"], "complete");
+    assert_eq!(output["coverage"]["json_lines"], 1);
+    assert_eq!(exit_code(&output), 0);
+}

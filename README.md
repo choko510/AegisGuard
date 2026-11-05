@@ -172,6 +172,18 @@ aegisguard defender audit
 - 読めなかった値は `unknown` とし、保護されているとは扱いません。管理者以外では除外の一覧が見えないため件数は `null` になります。**除外パスそのものは出力しません。**
 - ポリシーキーがある場合（`policy_key_present`）は、グループポリシーやMDMの設定が優先され、表示値と実際の適用状態が異なる可能性があります。
 
+### ローカルHTMLレポート（P4-03、読み取り専用）
+
+```powershell
+aegisguard scan C:\path --recursive --output reports\scan.jsonl
+aegisguard defender audit > reports\defender.json
+aegisguard report html --scan reports\scan.jsonl --defender reports\defender.json --out reports\report.html
+```
+
+- 各コマンドの出力（JSON/JSONL）から静的なHTMLを1つ作ります。スクリプトを含まず（CSPで禁止）、すべての値をエスケープし、外部へ送信しません。管理者権限は不要で、既存のファイルは上書きしません。
+- 完全に解析できなかったファイルを先頭に警告として出します。渡されなかった項目は「未提供（不明）」、読めなかったDefenderの値や期限切れのフィードは強調表示し、「問題なし」とは表示しません。
+- 常駐のGUIや特権サービスとのIPC（P2-05）は、常駐収集が必要になるまで実装しません。
+
 ### 限定FIM（P2-04、読み取りのみ）
 
 ```powershell

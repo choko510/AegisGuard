@@ -13,6 +13,7 @@ mod jsonl;
 mod model;
 mod pe;
 mod policy;
+mod report;
 mod rulepack;
 mod rules;
 mod scan;
@@ -103,6 +104,11 @@ enum Commands {
     Defender {
         #[command(subcommand)]
         command: DefenderCommand,
+    },
+    /// Build a read-only local HTML report from saved command outputs.
+    Report {
+        #[command(subcommand)]
+        command: ReportCommand,
     },
     /// Manage a locally cached list of public C2 indicators.
     C2 {
@@ -284,6 +290,33 @@ enum DefenderCommand {
         /// Interpret a saved query result instead of querying this machine.
         #[arg(long)]
         from_json: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReportCommand {
+    /// Write a static HTML file (no scripts, nothing uploaded, never overwritten).
+    Html {
+        /// Scan JSONL files (from `scan --output` or stdout).
+        #[arg(long)]
+        scan: Vec<PathBuf>,
+        /// Output of `events correlate`.
+        #[arg(long)]
+        correlation: Option<PathBuf>,
+        /// Output of `events iocs`.
+        #[arg(long)]
+        iocs: Option<PathBuf>,
+        /// Output of `defender audit`.
+        #[arg(long)]
+        defender: Option<PathBuf>,
+        /// Output of `c2 status`.
+        #[arg(long)]
+        c2_status: Option<PathBuf>,
+        /// Output of `fim check`.
+        #[arg(long)]
+        fim: Option<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 
@@ -698,6 +731,32 @@ fn main() -> Result<()> {
             if !audit.available {
                 return Err("Defender state could not be read; see errors".into());
             }
+        }
+        Commands::Report {
+            command:
+                ReportCommand::Html {
+                    scan,
+                    correlation,
+                    iocs,
+                    defender,
+                    c2_status,
+                    fim,
+                    out,
+                },
+        } => {
+            let inputs = report::Inputs {
+                scans: scan,
+                correlation,
+                iocs,
+                defender,
+                c2_status,
+                fim,
+            };
+            report::write(&inputs, &out, now())?;
+            println!(
+                "{}",
+                serde_json::json!({"status": "written", "out": out.display().to_string()})
+            );
         }
         Commands::C2 { command } => match command {
             C2Command::Update {

@@ -13,7 +13,8 @@ fn fixture(entries: Vec<Value>) -> Vec<u8> {
             {"id":"hkcu64","status":"complete","entries":[]},
             {"id":"hkcu32","status":"complete","entries":[]}
         ]
-    })).unwrap()
+    }))
+    .unwrap()
 }
 fn advisory(now: u64) -> Vec<u8> {
     serde_json::to_vec(&json!({
@@ -25,7 +26,8 @@ fn advisory(now: u64) -> Vec<u8> {
             "unaffected_versions":["1.9.5"],"architectures":["x64"],"editions":["Pro"],
             "source_url":"https://example.org/security/advisory"
         }]
-    })).unwrap()
+    }))
+    .unwrap()
 }
 fn evaluate(entries: Vec<Value>, now: u64) -> software_audit::model::MatchReport {
     let inv = inspect_fixture_bytes(&fixture(entries)).unwrap();
@@ -35,10 +37,13 @@ fn evaluate(entries: Vec<Value>, now: u64) -> software_audit::model::MatchReport
 #[test]
 fn exact_identity_arch_edition_and_version_are_candidates_only() {
     let now = 1_800_000_000_000;
-    let report = evaluate(vec![json!({
-        "name":"Widget Pro","version":"1.9","publisher":"Example Labs LLC",
-        "architecture":"x64","edition":"Pro"
-    })], now);
+    let report = evaluate(
+        vec![json!({
+            "name":"Widget Pro","version":"1.9","publisher":"Example Labs LLC",
+            "architecture":"x64","edition":"Pro"
+        })],
+        now,
+    );
     assert_eq!(report.status, "complete");
     assert_eq!(report.entries.len(), 1);
     assert_eq!(report.entries[0].classification, "candidate");
@@ -48,34 +53,49 @@ fn exact_identity_arch_edition_and_version_are_candidates_only() {
 #[test]
 fn similar_product_or_wrong_vendor_do_not_match() {
     let now = 1_800_000_000_000;
-    let report = evaluate(vec![
-        json!({"name":"Widget Pro Plus","version":"1.9","publisher":"Example Labs","architecture":"x64","edition":"Pro"}),
-        json!({"name":"Widget","version":"1.9","publisher":"Other Labs","architecture":"x64","edition":"Pro"}),
-    ], now);
+    let report = evaluate(
+        vec![
+            json!({"name":"Widget Pro Plus","version":"1.9","publisher":"Example Labs","architecture":"x64","edition":"Pro"}),
+            json!({"name":"Widget","version":"1.9","publisher":"Other Labs","architecture":"x64","edition":"Pro"}),
+        ],
+        now,
+    );
     assert!(report.entries.is_empty());
-    assert!(report.warnings.iter().any(|s| s.contains("not_proof_of_safety")));
+    assert!(report
+        .warnings
+        .iter()
+        .any(|s| s.contains("not_proof_of_safety")));
 }
 #[test]
 fn fixed_boundary_backport_and_arch_edition_mismatch_excluded() {
     let now = 1_800_000_000_000;
-    let report = evaluate(vec![
-        json!({"name":"Widget","version":"1.10","publisher":"Example Labs","architecture":"x64","edition":"Pro"}),
-        json!({"name":"Widget","version":"1.9.5","publisher":"Example Labs","architecture":"x64","edition":"Pro"}),
-        json!({"name":"Widget","version":"1.9","publisher":"Example Labs","architecture":"x86","edition":"Pro"}),
-        json!({"name":"Widget","version":"1.9","publisher":"Example Labs","architecture":"x64","edition":"Home"}),
-    ], now);
+    let report = evaluate(
+        vec![
+            json!({"name":"Widget","version":"1.10","publisher":"Example Labs","architecture":"x64","edition":"Pro"}),
+            json!({"name":"Widget","version":"1.9.5","publisher":"Example Labs","architecture":"x64","edition":"Pro"}),
+            json!({"name":"Widget","version":"1.9","publisher":"Example Labs","architecture":"x86","edition":"Pro"}),
+            json!({"name":"Widget","version":"1.9","publisher":"Example Labs","architecture":"x64","edition":"Home"}),
+        ],
+        now,
+    );
     assert!(report.entries.is_empty());
 }
 #[test]
 fn unknown_version_arch_and_publisher_not_confirmed() {
     let now = 1_800_000_000_000;
-    let report = evaluate(vec![
-        entry("Widget", None, Some("Example Labs")),
-        entry("Widget Pro", Some("1.9-beta"), Some("Example Labs")),
-        entry("Widget", Some("1.9"), None)
-    ], now);
+    let report = evaluate(
+        vec![
+            entry("Widget", None, Some("Example Labs")),
+            entry("Widget Pro", Some("1.9-beta"), Some("Example Labs")),
+            entry("Widget", Some("1.9"), None),
+        ],
+        now,
+    );
     assert_eq!(report.entries.len(), 3);
-    assert!(report.entries.iter().all(|m| m.classification == "unknown" && m.confidence == "low"));
+    assert!(report
+        .entries
+        .iter()
+        .all(|m| m.classification == "unknown" && m.confidence == "low"));
 }
 #[test]
 fn stale_or_future_advisory_cannot_produce_normal_candidate() {
@@ -85,7 +105,12 @@ fn stale_or_future_advisory_cannot_produce_normal_candidate() {
         let inv = inspect_fixture_bytes(&fixture(vec![app.clone()])).unwrap();
         let mut data: Value = serde_json::from_slice(&advisory(now)).unwrap();
         data["source_checked_at_unix_ms"] = json!(checked);
-        let out = match_bytes(&serde_json::to_vec(&inv).unwrap(), &serde_json::to_vec(&data).unwrap(), now).unwrap();
+        let out = match_bytes(
+            &serde_json::to_vec(&inv).unwrap(),
+            &serde_json::to_vec(&data).unwrap(),
+            now,
+        )
+        .unwrap();
         assert_eq!(out.status, "partial");
         assert_eq!(out.entries[0].classification, "unknown");
     }
@@ -127,13 +152,27 @@ fn empty_partial_denied_and_invalid_entries_distinguished() {
 fn malformed_duplicate_oversize_and_cpe_only_rejected() {
     assert!(inspect_fixture_bytes(b"{not-json").is_err());
     assert!(inspect_fixture_bytes(&vec![b'x'; 1024 * 1024 + 1]).is_err());
-    assert!(inspect_fixture_bytes(&serde_json::to_vec(&json!({"schema_version":1,"sources":[
-        {"id":"hklm64","status":"complete"},{"id":"hklm64","status":"complete"}
-    ]})).unwrap()).is_err());
-    let inv = inspect_fixture_bytes(&fixture(vec![entry("Widget", Some("1.9"), Some("Example Labs"))])).unwrap();
+    assert!(inspect_fixture_bytes(
+        &serde_json::to_vec(&json!({"schema_version":1,"sources":[
+            {"id":"hklm64","status":"complete"},{"id":"hklm64","status":"complete"}
+        ]}))
+        .unwrap()
+    )
+    .is_err());
+    let inv = inspect_fixture_bytes(&fixture(vec![entry(
+        "Widget",
+        Some("1.9"),
+        Some("Example Labs"),
+    )]))
+    .unwrap();
     let inv_json = serde_json::to_vec(&inv).unwrap();
     assert!(match_bytes(&inv_json, &vec![b' '; 2 * 1024 * 1024 + 1], model::now_ms()).is_err());
-    assert!(match_bytes(&inv_json, br#"{"schema_version":1,"advisories":[{"cpe":"cpe:2.3:a:*:*:*"}]}"#, model::now_ms()).is_err());
+    assert!(match_bytes(
+        &inv_json,
+        br#"{"schema_version":1,"advisories":[{"cpe":"cpe:2.3:a:*:*:*"}]}"#,
+        model::now_ms()
+    )
+    .is_err());
 }
 #[test]
 fn directory_cannot_be_read_as_input_file() {
@@ -151,10 +190,16 @@ fn synthetic_negative_cases_have_no_false_candidates() {
     ];
     samples.push(json!({"name":"Widget","version":"1.9","publisher":"Example Labs","architecture":"x64","edition":"Pro"}));
     let report = evaluate(samples, now);
-    let candidates = report.entries.iter().filter(|m| m.classification == "candidate").count();
-    assert_eq!(candidates, 1, "five negative cases must not become candidates");
+    let candidates = report
+        .entries
+        .iter()
+        .filter(|m| m.classification == "candidate")
+        .count();
+    assert_eq!(
+        candidates, 1,
+        "five negative cases must not become candidates"
+    );
 }
-
 
 #[test]
 fn unreadable_registry_subkeys_are_counted_and_make_coverage_partial() {
@@ -171,7 +216,12 @@ fn unreadable_registry_subkeys_are_counted_and_make_coverage_partial() {
     let result = inspect_fixture_bytes(&serde_json::to_vec(&raw).unwrap()).unwrap();
     assert_eq!(result.status, "partial");
     assert_eq!(result.coverage.skipped, 2);
-    let src = result.coverage.sources.iter().find(|s| s.id == "hklm64").unwrap();
+    let src = result
+        .coverage
+        .sources
+        .iter()
+        .find(|s| s.id == "hklm64")
+        .unwrap();
     assert_eq!(src.status, "partial");
     assert_eq!(src.skipped, 2);
     assert_eq!(result.entries.len(), 1);
@@ -186,7 +236,12 @@ fn denied_registry_source_is_not_reclassified_as_success() {
         ]
     });
     let result = inspect_fixture_bytes(&serde_json::to_vec(&raw).unwrap()).unwrap();
-    let src = result.coverage.sources.iter().find(|s| s.id == "hklm64").unwrap();
+    let src = result
+        .coverage
+        .sources
+        .iter()
+        .find(|s| s.id == "hklm64")
+        .unwrap();
     assert_eq!(src.status, "permission_denied");
     assert_eq!(result.coverage.skipped, 1);
     assert_ne!(result.status, "complete");

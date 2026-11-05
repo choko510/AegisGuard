@@ -599,35 +599,94 @@ pub fn summarize(expected: &Path, actual: &Path) -> LabResult<Value> {
     let mut entries = Vec::new();
     for case in &manifest.cases {
         let report = reports.get(&case.case_id);
-        if report.is_none() { warnings.push(format!("missing report for {}",case.case_id)); }
+        if report.is_none() {
+            warnings.push(format!("missing report for {}", case.case_id));
+        }
+        let report_complete = report.is_some_and(|v| {
+            v["rules"].is_array() && v["findings"].is_array()
+                && v.get("analysis_complete") != Some(&Value::Bool(false))
+                && (v.get("status").is_none()
+                    || v["status"] == "complete"
+                    || v["status"] == "ok")
+        });
+        let findings = if report_complete {
+            report.and_then(|v| v["findings"].as_array())
+        } else {
+            None
+        };
+        // Negative cases must fail on *any* unexpected detection; checking
+        // only the expected rule IDs could silently accept false positives.
+        if let Some(items) = findings {
+            for item in items {
+                let id = item["rule_id"].as_str();
+                let expected = id.and_then(|key| case.expected.iter().find(|e| e.rule_id == key));
+                let referenced = item["event_refs"].as_array().is_some_and(|refs| {
+                    !refs.is_empty() && refs.iter().all(Value::is_string)
+                });
+                if expected.is_none()
+                    || expected.is_some_and(|e| e.outcome != "present")
+                    || !referenced
+                {
+                    failed += 1;
+                    entries.push(json!({
+                        "case_id":case.case_id,
+                        "rule_id": id.unwrap_or("[invalid]"),
+                        "expected":"no_unexpected_finding",
+                        "assessment":"fail"
+                    }));
+                }
+            }
+        }
         for rule in &case.expected {
-            let assessment = match rule.outcome.as_str() {
-                "planned" => { planned += 1; "planned" }
-                "unknown" => { unknown += 1; "unknown" }
-                _ => {
-                    let report_complete = report.is_some_and(|v| {
-                        v["rules"].is_array() && v["findings"].is_array()
-                            && v.get("analysis_complete") != Some(&Value::Bool(false))
-                            && (v.get("status").is_none() || v["status"] == "complete" || v["status"] == "ok")
-                    });
-                    let evaluable = if report_complete {
-                        report.and_then(|v| v["rules"].as_array()).and_then(|rs| {
-                            rs.iter().find(|r| r["rule_id"].as_str() == Some(rule.rule_id.as_str()))
-                        }).and_then(|r| r["evaluable"].as_bool())
-                    } else { None };
-                    if evaluable != Some(true) { unknown += 1; "unknown" }
-                    else {
-                        let found = report.and_then(|v| v["findings"].as_array()).is_some_and(|fs| {
+            let assessment = if rule.outcome == "planned" {
+                planned += 1;
+                "planned"
+            } else if !report_complete {
+                unknown += 1;
+                "unknown"
+            } else {
+                let evaluable = report
+                    .and_then(|v| v["rules"].as_array())
+                    .and_then(|rs| {
+                        rs.iter().find(|r| r["rule_id"].as_str() == Some(rule.rule_id.as_str()))
+                    })
+                    .and_then(|r| r["evaluable"].as_bool());
+                let found = findings.is_some_and(|fs| {
+                    fs.iter().any(|f| f["rule_id"].as_str() == Some(rule.rule_id.as_str()))
+                });
+                match rule.outcome.as_str() {
+                    "unknown" if evaluable == Some(true) || found => {
+                        failed += 1;
+                        "fail"
+                    }
+                    "unknown" => {
+                        unknown += 1;
+                        "unknown"
+                    }
+                    "present" | "absent" if evaluable != Some(true) => {
+                        unknown += 1;
+                        "unknown"
+                    }
+                    "present" => {
+                        let matched = findings.is_some_and(|fs| {
                             fs.iter().any(|f| {
-                                if f["rule_id"].as_str() != Some(rule.rule_id.as_str()) { return false; }
-                                let refs = f["event_refs"].as_array();
-                                rule.event_refs.iter().all(|id| {
-                                    refs.is_some_and(|arr| arr.iter().any(|x| x.as_str() == Some(id)))
-                                })
+                                f["rule_id"].as_str() == Some(rule.rule_id.as_str())
+                                    && !rule.event_refs.is_empty()
+                                    && f["event_refs"].as_array().is_some_and(|refs| {
+                                        rule.event_refs.iter().all(|id| {
+                                            refs.iter().any(|x| x.as_str() == Some(id))
+                                        })
+                                    })
                             })
                         });
-                        if (rule.outcome == "present") == found { passed += 1; "pass" }
-                        else { failed += 1; "fail" }
+                        if matched { passed += 1; "pass" } else { failed += 1; "fail" }
+                    }
+                    "absent" => {
+                        if found { failed += 1; "fail" } else { passed += 1; "pass" }
+                    }
+                    _ => {
+                        failed += 1;
+                        "fail"
                     }
                 }
             };

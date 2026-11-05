@@ -80,7 +80,7 @@ fn rules() -> &'static Vec<Rule> {
                 "authorization_bearer",
                 "credential",
                 "high",
-                r"(?i)\b(?:authorization\s*[:=]\s*bearer|bearer)\s+([A-Za-z0-9._~+/-]{8,})",
+                r#"(?i)\b(?:authorization["']?\s*[:=]\s*["']?bearer|bearer)\s+([A-Za-z0-9._~+/-]{8,})"#,
                 true,
             ),
             (
@@ -94,14 +94,14 @@ fn rules() -> &'static Vec<Rule> {
                 "cookie_header",
                 "browser_credential",
                 "high",
-                r"(?i)\b(?:set-cookie|cookie)\s*[:=]\s*([A-Za-z0-9_.-]{2,}=[^\s;,]{4,})",
+                r#"(?i)\b(?:set-cookie|cookie)["']?\s*[:=]\s*["']?([A-Za-z0-9_.-]{2,}=[^\s;,"']{4,})"#,
                 true,
             ),
             (
                 "secret_assignment",
                 "credential",
                 "high",
-                r#"(?i)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd|secret|token)\s*[:=]\s*["']?([A-Za-z0-9._~+/-]{8,})"#,
+                r#"(?i)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd|secret|token)["']?\s*[:=]\s*["']?([A-Za-z0-9._~+/-]{8,})"#,
                 true,
             ),
             (
@@ -412,6 +412,9 @@ impl Inspector {
                 return Err("json_top_level_not_container");
             }
             self.lines_json += 1;
+            // Parsed maps discard earlier duplicate keys. Check raw syntax too,
+            // so an overwritten secret does not disappear from inspection.
+            self.scan_text(line, line_no)?;
             self.visit_json(&parsed, None, 0, line_no)?;
         } else {
             self.lines_log += 1;
@@ -693,6 +696,14 @@ mod tests {
         let result = audit_reader(sample.as_bytes(), Mode::Log);
         assert_eq!(exit_code(&result), 2);
         assert!(result["entries"].as_array().unwrap().len() >= 5);
+    }
+
+    #[test]
+    fn duplicate_json_key_cannot_hide_the_first_secret() {
+        let input = r#"{"token":"syntheticFIRST12345","token":"[REDACTED]"}"#;
+        let result = audit_reader(input.as_bytes(), Mode::Jsonl);
+        assert_eq!(exit_code(&result), 2);
+        assert!(!result.to_string().contains("syntheticFIRST12345"));
     }
 
     #[test]

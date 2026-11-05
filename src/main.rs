@@ -84,6 +84,11 @@ enum Commands {
         #[command(subcommand)]
         command: PolicyCommand,
     },
+    /// Read-only browser-integrity checks (nothing is deleted or changed).
+    Browser {
+        #[command(subcommand)]
+        command: BrowserCommand,
+    },
     /// Read-only Microsoft Defender / ASR state audit (never changes settings).
     Defender {
         #[command(subcommand)]
@@ -267,6 +272,17 @@ enum PolicyCommand {
         out: PathBuf,
         #[arg(long, default_value = "data/policy/audit.jsonl")]
         audit_log: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum BrowserCommand {
+    /// Look for the reported k2f traces (Chrome PlatformExperienceHelper DLL in a
+    /// 64-hex folder + HKCU CLSID InprocServer32) for the current user.
+    K2f {
+        /// Use this folder instead of %LOCALAPPDATA% (e.g. a copied profile).
+        #[arg(long)]
+        local_app_data: Option<PathBuf>,
     },
 }
 
@@ -610,6 +626,18 @@ fn main() -> Result<()> {
                 "{}",
                 serde_json::json!({"status": "approved_not_applied", "plan_id": approved.plan_id, "out": out.display().to_string()})
             );
+        }
+        Commands::Browser {
+            command: BrowserCommand::K2f { local_app_data },
+        } => {
+            let local =
+                local_app_data.or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from));
+            #[cfg(windows)]
+            let registry = aegisguard::browser::WindowsRegistry;
+            #[cfg(not(windows))]
+            let registry = aegisguard::browser::NoRegistry;
+            let report = aegisguard::browser::check_k2f(local.as_deref(), &registry);
+            print_json(&report)?;
         }
         Commands::Defender {
             command: DefenderCommand::Audit { from_json },

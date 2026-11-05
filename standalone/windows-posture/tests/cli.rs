@@ -27,9 +27,8 @@ fn inspect(path: &PathBuf) -> std::process::Output {
 
 #[test]
 fn fixture_cli_emits_only_json_and_no_raw_secrets() {
-    let path = temporary_fixture(
-        br#"{"bitlocker":{"status":"ok","recovery_key":"DO_NOT_PRINT_ME"}}"#,
-    );
+    let path =
+        temporary_fixture(br#"{"bitlocker":{"status":"ok","recovery_key":"DO_NOT_PRINT_ME"}}"#);
     let output = inspect(&path);
     fs::remove_file(path).unwrap();
     assert_eq!(output.status.code(), Some(2));

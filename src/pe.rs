@@ -26,7 +26,7 @@ fn entropy(data: &[u8]) -> f64 {
 /// Strictly bounded PE structural triage; not Authenticode verification or a disassembler.
 /// All offsets derive from the file and are checked before slicing.
 pub fn inspect(data: &[u8], report: &mut Report) {
-    if data.get(..2) != Some(b"MZ") {
+    if !data.starts_with(b"MZ") {
         report.unavailable("invalid_pe", "Missing DOS MZ signature");
         return;
     }
@@ -34,7 +34,7 @@ pub fn inspect(data: &[u8], report: &mut Report) {
         report.unavailable("invalid_pe", "Truncated DOS header");
         return;
     };
-    if data.get(pe_offset..pe_offset.saturating_add(4)) != Some(b"PE\0\0") {
+    if data.get(pe_offset..pe_offset.saturating_add(4)) != Some(&b"PE\0\0"[..]) {
         report.unavailable("invalid_pe", "Missing NT PE signature");
         return;
     }

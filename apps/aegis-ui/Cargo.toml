@@ -1,0 +1,21 @@
+[package]
+name = "aegis-ui"
+version = "0.1.0"
+edition = "2021"
+description = "AegisGuard read-only desktop UI (egui/eframe, runs as the normal user)"
+repository = "https://github.com/choko510/AegisGuard"
+# eframe 0.37 requires Rust 1.95; the CLI keeps rust-version 1.85.
+rust-version = "1.95"
+publish = false
+
+[dependencies]
+aegisguard = { path = "../.." }
+# No bundled fonts (default_fonts off): Japanese and Latin fonts are loaded
+# from the operating system at start-up.
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "glow", "x11", "wayland"] }
+flate2 = "1"
+serde_json = "1"
+
+[[bin]]
+name = "aegis-ui"
+path = "src/main.rs"

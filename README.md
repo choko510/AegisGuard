@@ -214,6 +214,17 @@ aegisguard fim watch --db data\fim\baseline.json --duration-secs 600   # Windows
 - ブラウザーの認証情報・Cookieのファイル（`Login Data`、`Cookies`、`key4.db`、`logins.json` 等）やレジストリハイブは**開かず**、`excluded_sensitive` として記録だけします。
 - FIMは変更しか見えません。ファイルを読み取って持ち出す行為（変更を伴わないもの）は検出できません。
 
+### デスクトップUI（P7、egui/eframe、読み取り専用）
+
+```powershell
+cargo run --release -p aegis-ui            # Rust 1.95以上が必要（CLIは1.85のまま）
+```
+
+- 通常ユーザー権限で動く読み取り専用のGUIです。画面は ホーム／スキャン／ブラウザー保護／リアルタイム監視／ネットワーク／検出履歴／ルール・設定（Ctrl+1〜7で切替、ライト/ダーク）。
+- 未実装の機能は「まだ利用できません」、結果の無い項目は「データなし」と表示し、「保護中」「安全」などの表示はしません。状態は色だけでなく記号と文字でも示します。
+- フォントは同梱せず、Windowsのフォント（游ゴシック等）を使います。
+- `--screenshot out.png [--page browser] [--theme dark] [--size 1280x800] [--scale 1.5]` で画面をPNGに保存して終了します（表示確認用）。
+
 ### 未実装の機能
 
 未実装：常駐のWindowsサービスとIPC（必要になった場合のみ）、AMSI連携、Authenticode、許諾を確認したドメインIOCフィード、ルールパックの配信、**Windows Firewallへの実際の遮断の適用**（隔離VMでの復旧の実証と明示の承認が前提）、プロセスメモリの検査（別途承認が前提）、常駐GUI。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。

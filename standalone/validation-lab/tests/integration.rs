@@ -182,3 +182,34 @@ fn symlink_artifact_is_rejected() {
     let report = verify(&a).unwrap();
     assert_eq!(report["status"], "partial");
 }
+
+#[test]
+fn malformed_incomplete_and_unknown_schema_reports_do_not_pass() {
+    let temp = Temporary::new();
+    let a = create(&temp, "case", 42, "benign-com");
+    let actual = temp.path().join("actual.jsonl");
+    // Missing findings array must not be interpreted as no detection.
+    let truncated = json!({"case_id":"benign-com","rules":[{"rule_id":"AG-B002","evaluable":true}]});
+    fs::write(&actual, format!("{truncated}\n")).unwrap();
+    assert_eq!(summarize(&a.join("manifest.json"), &actual).unwrap()["status"], "partial");
+    let partial = json!({"case_id":"benign-com","status":"partial",
+        "rules":[{"rule_id":"AG-B002","evaluable":true}],"findings":[]});
+    fs::write(&actual, format!("{partial}\n")).unwrap();
+    assert_eq!(summarize(&a.join("manifest.json"), &actual).unwrap()["coverage"]["unknown"], 1);
+    let newer = json!({"schema_version":999,"case_id":"benign-com","rules":[],"findings":[]});
+    fs::write(&actual, format!("{newer}\n")).unwrap();
+    assert!(summarize(&a.join("manifest.json"), &actual).is_err());
+}
+
+#[test]
+fn stale_ioc_is_explicitly_expired_and_future_rules_remain_planned() {
+    let temp = Temporary::new();
+    let a = create(&temp, "case", 42, "stale-ioc");
+    let ioc: Value = serde_json::from_slice(&fs::read(a.join("stale-ioc/expired-ioc.json")).unwrap()).unwrap();
+    assert!(ioc["expires_at_unix_ms"].as_u64().unwrap() < 1_793_872_800_000);
+    assert_eq!(ioc["compatible_with_aegisguard_c2_cache"], false);
+    assert_eq!(verify(&a).unwrap()["status"], "complete");
+    let actual = temp.path().join("actual.jsonl");
+    fs::write(&actual, b"{\"rules\":[],\"findings\":[]}\n").unwrap();
+    assert_eq!(summarize(&a.join("manifest.json"), &actual).unwrap()["status"], "partial");
+}

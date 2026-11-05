@@ -1,7 +1,7 @@
 # AegisGuard 実装ロードマップ（調査結果からの開発計画）
 
 > 作成日: 2026-11-05（JST） / 比較対象 `main`: [83fcf0d150e8d760baff5f971c106deb09c1f8e4](https://github.com/choko510/AegisGuard/tree/83fcf0d150e8d760baff5f971c106deb09c1f8e4)  
-> 関連：[ADOPTION_MATRIX.md](ADOPTION_MATRIX.md)（15件のcommit固定PR・重み付き比較・法務/安全ゲート）。**本書は実装命令の分割と検証基準であり、いずれのフェーズも未実装・未完了**。調査PR #3〜#17は未レビュー・未マージ。調査基盤PR [#2](https://github.com/choko510/AegisGuard/pull/2)も未マージ。
+> 関連：[ADOPTION_MATRIX.md](ADOPTION_MATRIX.md)（15件の固定head/Squash SHA、重み付き比較・法務/安全ゲート）。**本書は将来の実装タスク・検証基準であり、Phase 0〜4は未実装**。調査基盤PR [#2](https://github.com/choko510/AegisGuard/pull/2) と調査PR [#3〜#17](https://github.com/choko510/AegisGuard/pulls?q=is%3Apr+is%3Amerged) は2026-11-05に全件mainへマージ済み。提出者アカウントから16件へ技術COMMENTレビューを行ったが、独立APPROVEはなし。**Windows 11実機性能・誤検知・復旧試験は利用者の指示で今回スキップ（合格ではない）**。
 
 ## 0. 現行の開始点と実装原則
 
@@ -12,7 +12,13 @@ AegisGuard 0.1.0は**Rust CLIの静的PE/スクリプト調査・手動C2 IP更�
 - **Rust-first、境界は分離**：ローカルのcore/model、read-only sensor、rules/IOC updater、privileged response、一般ユーザーUIを明示的に分割。最初からすべてを別crateにせず、APIの境界だけ先行定義する。
 - **外部ソースをコピーしない**：Wazuh GPL/AGPL、ClamAV GPLv2、Portmaster/simplewall/Loki-RS GPLv3、ConfigureDefender独自条件。Windows公開APIと独自設計を採用。YARA-X公式BSD-3-ClauseはMSRV/依存ライセンスを検証後に候補。
 - **初期は未知サンプルを実行しない**：合成した無害なPE/スクリプト/イベント/IOC、専用テストルール、Mock HTTP/Windows 11隔離VMだけを使う。資格情報やブラウザDB、生のプロセスメモリをログ・クラウドへ送らない。
-- **依存の開始ゲート**：15調査PRの人間レビュー、未マージheadの再照合、AegisGuard配布ライセンスの方針確認。実装PR着手時にはその時点の`main`/Cargo/CIを再確認する。
+- **依存の開始ゲート**：15件のマージ済み報告と技術COMMENTを参照し、実装PR着手時にその時点の`main`/Cargo/CIを再確認する。独立第三者承認は未取得、AegisGuard本体ライセンスは所有者未決定。**本統合ドキュメントのマージにあたり両者を合格扱いしない**。外部資産の同梱・改変・再配布は許諾が決まるまで行わない。
+
+## 調査統合と実装検証の区別
+
+**今回完了すること**：調査基盤+15件の報告書のmain反映、固定SHA/出所/ライセンスを照合した採否の文書化、次のAI向けの実装タスク分割。**今回明示的に行わないこと**：Windows 11実機の性能・誤検知・復旧試験、コード実装、Defender/Firewall/サービス設定変更、悪性検体の実行。スキップした試験を過去に実施したことにはしない。将来実装して本番出荷する場合の安全ゲートは下記に残す。
+
+**外部コンポーネントの代替方針**：Feodo Trackerは[abuse.ch利用規約3.4](https://abuse.ch/terms-of-use/)のCC0例外の範囲で出所と鮮度を確認し、C2IntelFeedsは[公式CC BY-NC-SA 4.0](https://github.com/drb-ra/C2IntelFeeds/blob/eda1465f49e07fea4df4246a310fc94dd78873ed/README.md)のため商用/再配布製品の標準フィードにしない。Sysmonは[Microsoftライセンス](https://learn.microsoft.com/en-us/sysinternals/license-terms)により同梱せず、ユーザーがMicrosoft公式から別導入。YARA-Xは自作ルールだけで最小PoC。ConfigureDefender EXEやGPL/AGPLプロジェクトのコードは組み込まず、公開Windows APIから独立実装する。これらの**法務上の論点は利用しない設計によって隔離**したのであって、第三者の追加許諾を取得したわけではない。
 
 ## 共通評価方法（全フェーズ共通）
 
@@ -44,7 +50,7 @@ AegisGuard 0.1.0は**Rust CLIの静的PE/スクリプト調査・手動C2 IP更�
 5. **P0-05 CI/依存監査・基準値（S〜M）**  
    Linux/Windowsの`fmt / clippy -D warnings / test`、固定安全fixture、Cargo.lock固定、ライセンス一覧/SBOM、依存脆弱性検査、ワークフローAction SHA固定、無害なbenchmarkを整理。**DoD**：Windows Runnerで定期再現可能、セキュリティ検査の失敗を隠さない、CPU/RSS/ディスク/誤検知の初期レポートが残る。CI編集は**将来の実装PR**で行い本統合PRでは変更しない。
 
-**Phase 0出口**：WindowsとLinuxの既存テスト・異常入力・情報保護・クラッシュ復旧が合格し、ハードウェア別性能予算が決定済み。不明な検査を陰性に分類しない。**復旧**：後続機能フラグOFF、検査/更新を停止し前回有効なC2キャッシュ/JSONL形式に戻す。Defender/Firewallは一切変更しない。
+**Phase 0出口（将来の実装に対するゲートであり、今回の調査マージ条件ではない）**：WindowsとLinuxの既存テスト・異常入力・情報保護・クラッシュ復旧が合格し、ハードウェア別性能予算が決定済み。不明な検査を陰性に分類しない。**復旧**：後続機能フラグOFF、検査/更新を停止し前回有効なC2キャッシュ/JSONL形式に戻す。Defender/Firewallは一切変更しない。
 
 ## Phase 1 — YARA-X等の最小PoC（監査のみ）
 
@@ -158,4 +164,4 @@ AegisGuard 0.1.0は**Rust CLIの静的PE/スクリプト調査・手動C2 IP更�
 - **観測限界**：Sysmon ID 3/7は既定OFF、暗号化DNS/VPN/共有プロセスで帰属に限界。FIMで読み取りだけの情報持出しを検知できない。識別不能は未判定のまま残す。
 - **安全ゲート**：未知入力の無制限デコード、未署名更新、自動遮断、期限/ownerのないFWルール、復旧CLIがないOS書込、ルールの無許可再配布、全PIDメモリ常時検査が必要なら、フェーズを中止して設計再審査。
 
-**ロードマップの完了とは**：フェーズごとのDoDがWindows実機/CI・法務/情報保護・誤検知・性能・復旧で実証され、人間が承認した状態をいう。現時点では**Phase 0〜4のすべてが計画であり完了0件**。調査PRがレビュー後に変わったときは、固定SHA付き[採用マトリクス](ADOPTION_MATRIX.md)から再評価する。
+**研究統合の完了**：調査基盤PR #2、15件のレポートPR #3〜#17をmainにマージし、技術COMMENTと一次資料確認を[採用マトリクス](ADOPTION_MATRIX.md)へ反映した。**実装ロードマップの完了は別**：Phase 0〜4のDoDが将来のCI・安全・性能・誤検知・復旧で実証されるまで**完了0件**。今回はユーザー指示によりWindows 11実機試験をスキップするため、スコアや設計は製品の運用安全性を保証しない。将来の調査訂正が発生した場合は、マージ済み固定SHAとともに再評価する。

@@ -13,8 +13,8 @@ fn classify(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
         "exe" | "dll" | "sys" | "scr" | "ocx" | "cpl" => Some("pe"),
-        "py" | "pyw" | "js" | "jse" | "mjs" | "cjs" | "ps1" | "psm1"
-        | "psd1" | "bat" | "cmd" | "vbs" | "vbe" | "wsf" | "hta" => Some("script"),
+        "py" | "pyw" | "js" | "jse" | "mjs" | "cjs" | "ps1" | "psm1" | "psd1" | "bat" | "cmd"
+        | "vbs" | "vbe" | "wsf" | "hta" => Some("script"),
         _ => None,
     }
 }
@@ -41,9 +41,16 @@ pub fn scan_file(path: &Path) -> Report {
         report.unavailable("unreadable", "Not a regular file or is a symlink");
         return report;
     }
-    let limit = if kind == "pe" { MAX_PE_BYTES } else { MAX_SCRIPT_BYTES };
+    let limit = if kind == "pe" {
+        MAX_PE_BYTES
+    } else {
+        MAX_SCRIPT_BYTES
+    };
     if meta.len() > limit {
-        report.unavailable("oversized_no_deep_scan", "Size exceeds the configured deep-scan limit");
+        report.unavailable(
+            "oversized_no_deep_scan",
+            "Size exceeds the configured deep-scan limit",
+        );
         return report;
     }
 
@@ -81,7 +88,12 @@ pub fn run(path: &Path, recursive: bool, output: Option<&Path>) -> Result<()> {
                 fs::create_dir_all(parent)?;
             }
         }
-        Some(OpenOptions::new().append(true).create(true).open(destination)?)
+        Some(
+            OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(destination)?,
+        )
     } else {
         None
     };

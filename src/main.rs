@@ -3,6 +3,9 @@ mod c2;
 // The collector only has a production caller on Windows (the Event Log source).
 #[cfg_attr(not(windows), allow(dead_code))]
 mod events;
+mod fim;
+#[cfg(windows)]
+mod fimwatch;
 mod fsafe;
 mod jsonl;
 mod model;
@@ -82,6 +85,11 @@ enum Commands {
         #[command(subcommand)]
         command: EventsCommand,
     },
+    /// Limited file integrity monitoring of explicitly named paths (read-only).
+    Fim {
+        #[command(subcommand)]
+        command: FimCommand,
+    },
     /// Manage a locally cached list of public C2 indicators.
     C2 {
         #[command(subcommand)]
@@ -160,6 +168,29 @@ enum EventsCommand {
         /// C2 cache for AG-C002 (only fresh indicators count).
         #[arg(long, default_value = "data/c2-cache.json")]
         c2_cache: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum FimCommand {
+    /// Record size, identity and SHA-256 of the named files or directories.
+    Baseline {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        #[arg(long, default_value = "data/fim/baseline.json")]
+        db: PathBuf,
+    },
+    /// Rescan and report created, modified, renamed, deleted and unreadable entries.
+    Check {
+        #[arg(long, default_value = "data/fim/baseline.json")]
+        db: PathBuf,
+    },
+    /// Watch with Windows change notifications; every report comes from a rescan.
+    Watch {
+        #[arg(long, default_value = "data/fim/baseline.json")]
+        db: PathBuf,
+        #[arg(long, default_value_t = 60)]
+        duration_secs: u64,
     },
 }
 
@@ -377,6 +408,36 @@ fn collect_events(_: &str, _: PathBuf, _: PathBuf, _: u64) -> Result<()> {
     Err("event collection reads the Windows Event Log and is only available on Windows".into())
 }
 
+fn run_fim(command: FimCommand) -> Result<()> {
+    match command {
+        FimCommand::Baseline { paths, db } => {
+            let baseline = fim::baseline(&paths, &db)?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "baseline_recorded",
+                    "entries": baseline.entries.len(),
+                    "not_monitored": baseline.not_monitored,
+                })
+            );
+        }
+        FimCommand::Check { db } => {
+            println!("{}", serde_json::to_string(&fim::check(&fim::load(&db)?))?);
+        }
+        #[cfg(windows)]
+        FimCommand::Watch { db, duration_secs } => {
+            fimwatch::watch(&fim::load(&db)?, Duration::from_secs(duration_secs))?;
+        }
+        #[cfg(not(windows))]
+        FimCommand::Watch { .. } => {
+            return Err(
+                "change notifications are only implemented on Windows; use `fim check`".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -466,6 +527,7 @@ fn main() -> Result<()> {
                 })
             );
         }
+        Commands::Fim { command } => run_fim(command)?,
         Commands::C2 { command } => match command {
             C2Command::Update { cache } => c2::update(&cache)?,
             C2Command::Check { ip, cache } => c2::check(&cache, ip)?,

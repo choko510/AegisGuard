@@ -37,7 +37,7 @@ strip = true
 yara = ["dep:yara-x"]
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_EventLog"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_EventLog", "Win32_System_IO"] }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2"

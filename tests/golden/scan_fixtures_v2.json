@@ -14,7 +14,7 @@
     "decoded_layers": 0,
     "engine": {
       "name": "aegisguard-static",
-      "ruleset": "builtin-static-1",
+      "ruleset": "builtin-static-2",
       "version": "0.1.0"
     },
     "file_identity": {
@@ -57,7 +57,7 @@
     "decoded_layers": 0,
     "engine": {
       "name": "aegisguard-static",
-      "ruleset": "builtin-static-1",
+      "ruleset": "builtin-static-2",
       "version": "0.1.0"
     },
     "file_identity": {
@@ -98,7 +98,7 @@
     "decoded_layers": 0,
     "engine": {
       "name": "aegisguard-static",
-      "ruleset": "builtin-static-1",
+      "ruleset": "builtin-static-2",
       "version": "0.1.0"
     },
     "file_identity": {
@@ -145,7 +145,7 @@
     "decoded_layers": 0,
     "engine": {
       "name": "aegisguard-static",
-      "ruleset": "builtin-static-1",
+      "ruleset": "builtin-static-2",
       "version": "0.1.0"
     },
     "file_identity": {

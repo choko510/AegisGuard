@@ -557,7 +557,7 @@ fn parse_synthetic_xml(bytes: &[u8]) -> LabResult<Value> {
             },
             XmlEvent::End(e) => {
                 let tag = path.pop().ok_or("unbalanced synthetic XML")?;
-                if e.local_name().as_ref() != tag {
+                if e.local_name().as_ref() != tag.as_slice() {
                     return Err("mismatched synthetic XML tag".into());
                 }
                 let in_system = path.last().is_some_and(|p| p.as_slice() == b"System");

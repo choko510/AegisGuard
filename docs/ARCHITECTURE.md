@@ -4,17 +4,19 @@
 
 Windows 11 target; compatibility with Microsoft Defender. Efficient service-based monitoring, explicit defensive policy enforcement, and offline-capable triage. **No private kernel driver** as an initial prerequisite.
 
-## Crate/module boundaries (planned evolution)
+## Crate/module boundaries
 
-| Unit | Current | Target |
+| Unit | Current (2026-11-05) | Target |
 | --- | --- | --- |
-| core / model | Rust CLI modules | Extract reusable \`aegis-core\` library for reports, limits, rules, score calibration |
-| static script | Bounded literal deobfuscation and signatures | Language-aware parsers (PowerShell AST/JS AST/Python AST), provenance graph, YARA-X |
+| core / model | Rust CLI modules; JSONL schema v2 with independent completeness (`assessment`) and detection (`signal_level`) axes; handle-based file identity; time/size/file-count budgets | Extract reusable \`aegis-core\` library for reports, limits, rules, score calibration |
+| static script | Bounded literal deobfuscation and signatures; optional YARA-X (feature `yara`, no modules) over raw and decoded layers | Language-aware parsers (PowerShell AST/JS AST/Python AST), provenance graph |
 | PE analysis | Bounded headers, W+X and section entropy | Authenticode via Windows API, imports/exports, overlay semantics, packer evidence |
-| IOC feeds | Feodo & validated C2Intel IP download/cache/check | Source provenance, expiry per source, allowlists, signed rules, domain + URL + IP:port |
-| Windows sensor | Not implemented | Process creation, image loads, network event ingestion and correlation |
-| response | Not implemented | Optional outbound firewall policy with dry-run, admin approval, rollback |
-| UI | CLI JSONL | Desktop dashboard/client separate from privileged service |
+| rules | Self-authored YARA rules with a provenance ledger, compile gate (warnings are errors), Ed25519-signed packs with replay protection and two-generation rollback | Rule QA corpus, reviewed third-party rules (after per-rule licensing) |
+| IOC feeds | Source registry with license and default flag (Feodo default, C2Intel opt-in), two-generation cache, IocEvidence with expiry, user IOCs/allowlist with mandatory expiry | Domain/URL feeds with confirmed licensing, signed IOC packs |
+| Windows sensor | Read-only Event Log collector (bookmark advanced only after a durable spool write, gaps reported), Sysmon ProcessGuid lifetimes, offline correlation rules, limited FIM (rescan + ReadDirectoryChangesW) | Resident service (P2-05) only if continuous collection is needed |
+| response | Dry-run outbound block planning and approval audit only; **no OS policy is modified** | Windows Firewall owned-rule backend (P3-03) after isolated-VM recovery evidence and explicit approval |
+| Defender | Read-only `Get-MpComputerStatus` / `Get-MpPreference` audit | Defender Operational/ASR event correlation in reports |
+| UI | CLI JSONL and a static, script-free HTML report | Desktop dashboard separate from any privileged service |
 
 ### Event analysis (planned)
 
@@ -43,6 +45,7 @@ Windows 11 target; compatibility with Microsoft Defender. Efficient service-base
 5. Benchmark CPU/memory on common Windows laptops; cap disk and network usage.
 6. Test with Defender enabled, user/admin separation, and controlled rollback/failure injection.
 
-## Current MVP scope
+## Current scope
 
-This branch offers local static triage and manual IOC cache operations. It does **not** offer real-time detection or automatic blocking yet. Do not represent a heuristic match as malware certainty.
+AegisGuard offers local static triage (optionally with YARA-X), manual IOC cache operations, read-only Windows event collection with offline correlation, limited FIM, a read-only Defender audit and a static HTML report. It does **not** offer real-time prevention, a resident service or any automatic blocking, and it never changes Defender, Windows Firewall or other OS security settings. Do not represent a heuristic or correlation match as malware certainty. Per-task status is in [IMPLEMENTATION_ROADMAP.md](research/decisions/IMPLEMENTATION_ROADMAP.md#8-実装状況2026-11-05).
+

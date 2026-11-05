@@ -593,7 +593,13 @@ fn run_fim(command: FimCommand) -> Result<()> {
 /// Tick work used by the service: continuous Event Log collection (P8-02).
 #[cfg(windows)]
 fn service_work() -> Box<dyn aegisguard::service::TickWork + Send> {
-    Box::new(aegisguard::service::collect::CollectionWork::windows())
+    use aegisguard::service::correlate::{CorrelationWork, Pipeline, MAX_WINDOW_EVENTS, WINDOW_MS};
+    Box::new(Pipeline(vec![
+        Box::new(aegisguard::service::collect::CollectionWork::windows()),
+        // Incremental correlation (P8-04); C2 IOCs from the data directory's
+        // cache when present (`c2 update --cache <data>\c2-cache.json`).
+        Box::new(CorrelationWork::new(WINDOW_MS, MAX_WINDOW_EVENTS)),
+    ]))
 }
 
 #[cfg(not(windows))]

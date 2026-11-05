@@ -147,6 +147,9 @@ pub fn handle(body: &[u8], client: &ClientInfo, layout: &Layout) -> Response {
                         "rules": doc.rules,
                         "updated_at_unix_ms": doc.updated_at_unix_ms,
                         "window": doc.window,
+                        "new_findings": doc.new_findings,
+                        "network": doc.network,
+                        "timelines": doc.timelines,
                     }))
                 }
                 Ok(None) => Response::ok(

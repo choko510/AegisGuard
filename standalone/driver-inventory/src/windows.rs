@@ -205,7 +205,7 @@ fn query_config(manager: Handle, name: &str, service: &mut RawService) {
     // SAFETY: Successful QueryServiceConfigW writes a QUERY_SERVICE_CONFIGW.
     let config = unsafe { (mem.as_ptr().cast::<QueryServiceConfigW>()).read_unaligned() };
     service.start_type = Some(config.start_type);
-    match bounded_wide(config.binary_path, &mem, crate::MAX_IMAGE_UNITS) {
+    match bounded_wide(config.binary_path, &mem, driver_inventory::MAX_IMAGE_UNITS) {
         Ok(image) => service.image_path = Some(image),
         Err(_) => service.config_error = Some("unavailable"),
     }

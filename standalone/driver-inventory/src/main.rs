@@ -19,8 +19,9 @@ fn live(drivers_only: bool, verify_signatures: bool, show_paths: bool) -> Value 
         Ok(value) => value,
         Err(code) => return error_report(code),
     };
-    let mut items = windows::collect(drivers_only);
-    windows::enrich(&mut items, &windows_dir, verify_signatures);
+    let started = std::time::Instant::now();
+    let mut items = windows::collect(drivers_only, started);
+    windows::enrich(&mut items, &windows_dir, verify_signatures, started);
     report(items, drivers_only, show_paths, &windows_dir)
 }
 #[cfg(not(windows))]

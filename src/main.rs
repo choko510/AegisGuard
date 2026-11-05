@@ -166,21 +166,23 @@ enum EventsCommand {
     /// Rebuild Sysmon process lifetimes (keyed by ProcessGuid) from a spool, offline.
     Processes {
         #[arg(long, default_value = "data/events/sysmon.jsonl")]
-        spool: PathBuf,
+        spool: Vec<PathBuf>,
     },
     /// Run the built-in correlation rules over a spool, offline. Findings are
     /// reasons to look, not verdicts; nothing is blocked or deleted.
     Correlate {
+        /// One or more spools (e.g. Sysmon and Defender Operational).
         #[arg(long, default_value = "data/events/sysmon.jsonl")]
-        spool: PathBuf,
+        spool: Vec<PathBuf>,
         #[command(flatten)]
         iocs: IocArgs,
     },
     /// Attribute IP and DNS IOC evidence to processes, with confidence and
     /// unknown visibility (DoH, VPN, disabled event types) stated.
     Iocs {
+        /// One or more spools (e.g. Sysmon and Defender Operational).
         #[arg(long, default_value = "data/events/sysmon.jsonl")]
-        spool: PathBuf,
+        spool: Vec<PathBuf>,
         #[command(flatten)]
         iocs: IocArgs,
     },
@@ -244,8 +246,9 @@ enum FimCommand {
 enum PolicyCommand {
     /// Turn attributed IOC findings into candidate rules and rejections (dry run).
     Plan {
+        /// One or more spools (e.g. Sysmon and Defender Operational).
         #[arg(long, default_value = "data/events/sysmon.jsonl")]
-        spool: PathBuf,
+        spool: Vec<PathBuf>,
         #[command(flatten)]
         iocs: IocArgs,
         #[arg(long, default_value_t = 24)]
@@ -573,7 +576,7 @@ fn main() -> Result<()> {
         Commands::Events {
             command: EventsCommand::Iocs { spool, iocs },
         } => {
-            let (events, bad_lines) = events::process::read_spool(&spool)?;
+            let (events, bad_lines) = events::process::read_spools(&spool)?;
             let table = events::process::ProcessTable::build(&events);
             let report = events::network::attribute(&table, &iocs.load()?);
             println!(
@@ -584,7 +587,7 @@ fn main() -> Result<()> {
         Commands::Events {
             command: EventsCommand::Correlate { spool, iocs },
         } => {
-            let (events, bad_lines) = events::process::read_spool(&spool)?;
+            let (events, bad_lines) = events::process::read_spools(&spool)?;
             let table = events::process::ProcessTable::build(&events);
             let iocs = iocs.load()?;
             let active = |ip: &str| {
@@ -610,7 +613,7 @@ fn main() -> Result<()> {
         Commands::Events {
             command: EventsCommand::Processes { spool },
         } => {
-            let (events, bad_lines) = events::process::read_spool(&spool)?;
+            let (events, bad_lines) = events::process::read_spools(&spool)?;
             let table = events::process::ProcessTable::build(&events);
             println!(
                 "{}",
@@ -633,7 +636,7 @@ fn main() -> Result<()> {
                     out,
                 },
         } => {
-            let (events, _) = events::process::read_spool(&spool)?;
+            let (events, _) = events::process::read_spools(&spool)?;
             let table = events::process::ProcessTable::build(&events);
             let report = events::network::attribute(&table, &iocs.load()?);
             let plan = policy::plan(&report.findings, now(), expiry_hours.saturating_mul(3600))?;

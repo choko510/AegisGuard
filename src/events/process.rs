@@ -14,7 +14,11 @@ pub const NETWORK_CONNECT: u32 = 3;
 pub const PROCESS_TERMINATE: u32 = 5;
 pub const IMAGE_LOAD: u32 = 7;
 pub const PROCESS_ACCESS: u32 = 10;
+pub const FILE_CREATE: u32 = 11;
 pub const DNS_QUERY: u32 = 22;
+pub const DEFENDER_PROVIDER: &str = "Microsoft-Windows-Windows Defender";
+/// Defender Operational: malware detected / action taken.
+pub const DEFENDER_DETECTIONS: [u32; 2] = [1116, 1117];
 /// Per-process evidence lists are capped; the rest is only counted.
 const MAX_REFS: usize = 64;
 const MAX_SPOOL_EVENTS: usize = 2_000_000;
@@ -48,8 +52,36 @@ pub struct ProcessRecord {
     pub contacts: Vec<Contact>,
     pub omitted_contacts: usize,
     pub image_loads: u64,
-    pub accessed_targets: Vec<String>,
+    pub accesses: Vec<Access>,
+    pub created_files: Vec<FileCreate>,
     pub event_uids: Vec<String>,
+}
+
+/// Sysmon ID 10: this process opened another process.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Access {
+    pub target_image: String,
+    pub granted_access: Option<u32>,
+    pub at_unix_ms: Option<i64>,
+    pub event_uid: String,
+}
+
+/// Sysmon ID 11: this process created a file.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FileCreate {
+    pub path: String,
+    pub at_unix_ms: Option<i64>,
+    pub event_uid: String,
+}
+
+/// Microsoft Defender detection (Operational 1116/1117), keyed by file path.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DefenderDetection {
+    /// Lower-case path without the `file:_` prefix.
+    pub path: String,
+    pub threat_name: Option<String>,
+    pub at_unix_ms: Option<i64>,
+    pub event_uid: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -68,6 +100,8 @@ pub struct ProcessTable {
     pub duplicates: u64,
     pub skipped_without_guid: u64,
     pub anomalies: Vec<Anomaly>,
+    pub defender_detections: Vec<DefenderDetection>,
+    pub observed_defender_event_ids: BTreeMap<u32, u64>,
     #[serde(skip)]
     seen: BTreeSet<String>,
 }
@@ -89,6 +123,7 @@ impl ProcessTable {
         for e in sorted {
             table.ingest(e);
         }
+        table.ingest_defender(events);
         table.check_pid_overlaps();
         table
     }
@@ -183,14 +218,64 @@ impl ProcessTable {
             IMAGE_LOAD => record.image_loads += 1,
             PROCESS_ACCESS => {
                 if let Some(target) = e.field_owned("TargetImage") {
-                    if record.accessed_targets.len() < MAX_REFS
-                        && !record.accessed_targets.contains(&target)
-                    {
-                        record.accessed_targets.push(target);
+                    if record.accesses.len() < MAX_REFS {
+                        record.accesses.push(Access {
+                            target_image: target,
+                            granted_access: e.field_owned("GrantedAccess").and_then(|g| {
+                                u32::from_str_radix(g.trim_start_matches("0x"), 16).ok()
+                            }),
+                            at_unix_ms: e.occurred_at_unix_ms,
+                            event_uid: e.event_uid.clone(),
+                        });
+                    }
+                }
+            }
+            FILE_CREATE => {
+                if let Some(path) = e.field_owned("TargetFilename") {
+                    if record.created_files.len() < MAX_REFS {
+                        record.created_files.push(FileCreate {
+                            path,
+                            at_unix_ms: e.occurred_at_unix_ms,
+                            event_uid: e.event_uid.clone(),
+                        });
                     }
                 }
             }
             _ => {}
+        }
+    }
+
+    fn ingest_defender(&mut self, events: &[EventEnvelope]) {
+        for e in events
+            .iter()
+            .filter(|e| e.source == DEFENDER_PROVIDER && DEFENDER_DETECTIONS.contains(&e.event_id))
+        {
+            if !self.seen.insert(e.event_uid.clone()) {
+                self.duplicates += 1;
+                continue;
+            }
+            *self
+                .observed_defender_event_ids
+                .entry(e.event_id)
+                .or_default() += 1;
+            let Some(paths) = e.field_owned("Path") else {
+                continue;
+            };
+            for path in paths.split(';').filter(|p| !p.trim().is_empty()) {
+                let path = path.trim();
+                let path = path
+                    .split_once('_')
+                    .filter(|(scheme, _)| scheme.ends_with(':'))
+                    .map_or(path, |(_, rest)| rest);
+                if self.defender_detections.len() < MAX_REFS {
+                    self.defender_detections.push(DefenderDetection {
+                        path: path.to_ascii_lowercase(),
+                        threat_name: e.field_owned("Threat Name"),
+                        at_unix_ms: e.occurred_at_unix_ms,
+                        event_uid: e.event_uid.clone(),
+                    });
+                }
+            }
         }
     }
 
@@ -261,6 +346,21 @@ pub fn parse_query_results(text: &str) -> Vec<String> {
         .filter_map(crate::ioc::normalize_ip)
         .take(MAX_REFS)
         .collect()
+}
+
+/// Read and concatenate several spools; bad lines are summed.
+pub fn read_spools(paths: &[std::path::PathBuf]) -> Result<(Vec<EventEnvelope>, u64)> {
+    let mut events = Vec::new();
+    let mut bad = 0;
+    for path in paths {
+        let (mut more, more_bad) = read_spool(path)?;
+        events.append(&mut more);
+        bad += more_bad;
+        if events.len() > MAX_SPOOL_EVENTS {
+            return Err("spools exceed the event limit".into());
+        }
+    }
+    Ok((events, bad))
 }
 
 /// Read a spool written by `events collect`. Malformed or oversized lines are

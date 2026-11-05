@@ -2,19 +2,22 @@
 
 **Rust製のWindows向け防御的セキュリティツール（開発初期段階）**
 
-Microsoft Defenderを無効化せず、EXE / DLL / スクリプトの静的解析と、公開C2 IPフィードとの照合を追加するプロジェクトです。**検査対象のファイルは実行しません。** 不審なファイルや通信先を、根拠付きのJSONLデータとして分析することを目的としています。
+Microsoft Defenderを無効化せず、EXE / DLL / スクリプトの静的解析、公開C2 IPフィードとの照合、Windowsイベントログの読み取りと相関を追加するプロジェクトです。**検査対象のファイルは実行しません。** 不審なファイルや通信先を、根拠付きのJSONLデータとして分析することを目的としています。
 
 > [!WARNING]
-> 現在はRust製CLIの**MVP（基盤実装）**です。製品レベルの常駐保護・実行前遮断・Windows Firewall操作・署名検証は未実装です。「検出なし」は安全の証明ではありません。
+> Rust製CLIの**調査・監査用ツール**です。常駐保護・実行前遮断・Windows Firewallの操作は実装していません（遮断は計画のdry-runのみ）。Windows 11実機での性能・誤検知・復旧の検証は未実施です。「検出なし」は安全の証明ではありません。各タスクの状況は [IMPLEMENTATION_ROADMAP.md の実装状況](docs/research/decisions/IMPLEMENTATION_ROADMAP.md) を参照してください。
 
 ## 実装済み
 
-- Rust CLIで単独ファイルまたはフォルダーを読み取り専用検査。結果を標準出力とJSONLに出力
+- Rust CLIで単独ファイルまたはフォルダーを読み取り専用検査。結果を標準出力とJSONL（スキーマv2）に出力。リンクを辿らないハンドルベースの読み取りと同一性確認
 - EXE / DLL / SYS / OCX / SCR / CPL：PEヘッダー・セクション表検証、W+Xセクション、高エントロピー検出
 - PY / PYW / JS / JSE / MJS / CJS / PS1 / PSM1 / PSD1 / BAT / CMD / VBS / VBE / WSF / HTA：危険な操作の**組み合わせ**を検査
 - スクリプトの限定的な静的難読化解除：Base64、UTF-16、zlib/gzip、JS fromCharCode、Python chr列、文字列連結、JS文字列逆転、16進/Unicodeエスケープ、BATの変数・キャレット
-- デコード深度3、最大16層、復元バイト数の上限、入力ファイルサイズ上限
-- 公開C2 IPフィードの**手動更新とオフライン照合**（Feodo Tracker／C2IntelFeeds）。キャッシュ不鮮度を表示。通信遮断なし
+- デコード深度3、最大16層、復元バイト数・入力サイズ・時間・ファイル数・総バイト数の上限
+- 任意機能のYARA-X（自作ルール・台帳・コンパイルゲート・署名付きルールパック）
+- 公開C2 IPフィードの**手動更新とオフライン照合**（Feodo Tracker。C2IntelFeedsは明示時のみ）。2世代キャッシュ、出所・ライセンス・期限付きの根拠。通信遮断なし
+- Windowsイベントログ（Sysmon・Defender等）の読み取り収集、ProcessGuid単位のプロセス生存期間、オフライン相関（認証情報窃取の兆候を含む）、IP/DNS/プロセスの帰属
+- 明示したパスの限定FIM、Microsoft Defender/ASRの読み取り専用監査、遮断候補のdry-run計画、静的HTMLレポート
 - GitHub Actions：Windows・Linuxでfmt／clippy／テスト、宣言したMSRV（1.85）でのビルド、`cargo-deny` によるライセンス・脆弱性・取得元の検査、ライセンス一覧とCycloneDX SBOMの生成、合成コーパスでの性能・誤検知ベースライン計測（毎週の定期実行あり）。Actionはコミットハッシュで固定し、`Cargo.lock` をコミットしています
 
 ## 必要な環境
@@ -198,9 +201,9 @@ aegisguard fim watch --db data\fim\baseline.json --duration-secs 600   # Windows
 - ブラウザーの認証情報・Cookieのファイル（`Login Data`、`Cookies`、`key4.db`、`logins.json` 等）やレジストリハイブは**開かず**、`excluded_sensitive` として記録だけします。
 - FIMは変更しか見えません。ファイルを読み取って持ち出す行為（変更を伴わないもの）は検出できません。
 
-### 今後の本番機能
+### 未実装の機能
 
-Windowsサービス、ProcessGuid相関、AMSI連携、Authenticode、DNS/ドメインIOC、明示的なWindows Firewallアウトバウンド遮断と安全な巻き戻し、ログローテーション、署名付きルール更新、GUIなどを段階的に追加します。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。
+未実装：常駐のWindowsサービスとIPC（必要になった場合のみ）、AMSI連携、Authenticode、許諾を確認したドメインIOCフィード、ルールパックの配信、**Windows Firewallへの実際の遮断の適用**（隔離VMでの復旧の実証と明示の承認が前提）、プロセスメモリの検査（別途承認が前提）、常駐GUI。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。
 
 ## 脅威フィード
 

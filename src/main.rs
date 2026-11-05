@@ -11,6 +11,7 @@ mod ioc;
 mod jsonl;
 mod model;
 mod pe;
+mod policy;
 mod rulepack;
 mod rules;
 mod scan;
@@ -90,6 +91,12 @@ enum Commands {
     Fim {
         #[command(subcommand)]
         command: FimCommand,
+    },
+    /// Plan outbound blocks as a dry run and record approvals. Nothing is applied
+    /// to Windows Firewall or any other OS setting.
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommand,
     },
     /// Manage a locally cached list of public C2 indicators.
     C2 {
@@ -230,6 +237,34 @@ enum FimCommand {
         db: PathBuf,
         #[arg(long, default_value_t = 60)]
         duration_secs: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum PolicyCommand {
+    /// Turn attributed IOC findings into candidate rules and rejections (dry run).
+    Plan {
+        #[arg(long, default_value = "data/events/sysmon.jsonl")]
+        spool: PathBuf,
+        #[command(flatten)]
+        iocs: IocArgs,
+        #[arg(long, default_value_t = 24)]
+        expiry_hours: u64,
+        /// New file for the plan (never overwritten).
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Record an administrator approval of a plan in an audit log (still a dry run).
+    Approve {
+        plan: PathBuf,
+        #[arg(long)]
+        approver: String,
+        #[arg(long)]
+        note: String,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "data/policy/audit.jsonl")]
+        audit_log: PathBuf,
     },
 }
 
@@ -589,6 +624,49 @@ fn main() -> Result<()> {
             );
         }
         Commands::Fim { command } => run_fim(command)?,
+        Commands::Policy {
+            command:
+                PolicyCommand::Plan {
+                    spool,
+                    iocs,
+                    expiry_hours,
+                    out,
+                },
+        } => {
+            let (events, _) = events::process::read_spool(&spool)?;
+            let table = events::process::ProcessTable::build(&events);
+            let report = events::network::attribute(&table, &iocs.load()?);
+            let plan = policy::plan(&report.findings, now(), expiry_hours.saturating_mul(3600))?;
+            policy::save(&plan, &out)?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "plan_id": plan.plan_id,
+                    "dry_run": plan.dry_run,
+                    "candidates": plan.candidates.len(),
+                    "rejected": plan.rejected.len(),
+                    "visibility": report.visibility,
+                    "out": out.display().to_string(),
+                    "note": "Nothing was applied. Applying plans is not implemented in this build.",
+                })
+            );
+        }
+        Commands::Policy {
+            command:
+                PolicyCommand::Approve {
+                    plan,
+                    approver,
+                    note,
+                    out,
+                    audit_log,
+                },
+        } => {
+            let approved = policy::approve(&plan, &approver, &note, &out, &audit_log)?;
+            println!(
+                "{}",
+                serde_json::json!({"status": "approved_not_applied", "plan_id": approved.plan_id, "out": out.display().to_string()})
+            );
+        }
         Commands::C2 { command } => match command {
             C2Command::Update {
                 cache,

@@ -138,7 +138,6 @@ fn symlink_is_not_followed() {
     fs::remove_file(target).unwrap();
 }
 
-
 #[test]
 fn secret_arrays_and_nested_objects_inherit_sensitive_parent() {
     for input in [

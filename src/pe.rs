@@ -621,7 +621,7 @@ mod structure_tests {
         let name = c_string(&data, 0).unwrap();
         assert_eq!(name.chars().count(), MAX_NAME_BYTES + 1);
         assert!(name.ends_with('…'));
-        assert!(c_string(b"badname ", 0).is_none());
+        assert!(c_string(b"bad\x01name\0", 0).is_none());
         assert!(c_string(b"no-terminator", 0).is_none());
     }
 

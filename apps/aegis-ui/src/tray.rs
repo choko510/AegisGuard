@@ -8,6 +8,8 @@
 use std::sync::mpsc;
 
 /// What the tray asks the app to do.
+// Only the Windows tray produces events.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
     Open,

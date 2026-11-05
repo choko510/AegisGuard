@@ -17,6 +17,7 @@ Microsoft Defenderを無効化せず、EXE / DLL / スクリプトの静的解�
 - 任意機能のYARA-X（自作ルール・台帳・コンパイルゲート・署名付きルールパック）
 - 公開C2 IPフィードの**手動更新とオフライン照合**（Feodo Tracker。C2IntelFeedsは明示時のみ）。2世代キャッシュ、出所・ライセンス・期限付きの根拠。通信遮断なし
 - Windowsイベントログ（Sysmon・Defender等）の読み取り収集、ProcessGuid単位のプロセス生存期間、オフライン相関（認証情報窃取の兆候を含む）、IP/DNS/プロセスの帰属
+- ブラウザー乗っ取りの既知痕跡（k2f：ChromeのPlatformExperienceHelper配下のDLLとHKCUのCOM登録）の読み取り専用チェック
 - 明示したパスの限定FIM、Microsoft Defender/ASRの読み取り専用監査、遮断候補のdry-run計画、静的HTMLレポート
 - GitHub Actions：Windows・Linuxでfmt／clippy／テスト、宣言したMSRV（1.85）でのビルド、`cargo-deny` によるライセンス・脆弱性・取得元の検査、ライセンス一覧とCycloneDX SBOMの生成、合成コーパスでの性能・誤検知ベースライン計測（毎週の定期実行あり）。Actionはコミットハッシュで固定し、`Cargo.lock` をコミットしています
 
@@ -174,6 +175,17 @@ aegisguard defender audit
 - リアルタイム保護・改ざん防止・クラウド保護・ネットワーク保護・フォルダーアクセスの制御・PUA・ASRルール（Microsoftの公開GUIDで名前を表示、未知のGUIDは `unknown_rule`）の状態を出します。
 - 読めなかった値は `unknown` とし、保護されているとは扱いません。管理者以外では除外の一覧が見えないため件数は `null` になります。**除外パスそのものは出力しません。**
 - ポリシーキーがある場合（`policy_key_present`）は、グループポリシーやMDMの設定が優先され、表示値と実際の適用状態が異なる可能性があります。
+
+### ブラウザー乗っ取りの既知痕跡チェック（P6-01、読み取り専用）
+
+```powershell
+aegisguard browser k2f
+```
+
+- 2026年に公表されたNIKKE PCランチャーの事案（k2f）の痕跡として、`%LOCALAPPDATA%\Google\Chrome\User Data\PlatformExperienceHelper\<16進64桁>\platform_experience_helper.dll` と、`HKCU\Software\Classes\CLSID\{E77CC89B-7401-4C04-8CED-149DB35ADD04}\InprocServer32`（WOW6432Nodeを含む）の参照先を確認します。
+- `PlatformExperienceHelper` フォルダー自体はChromeの正常なデータで、それだけでは報告しません。HKLMの登録は参考情報で、単独の指標にしません。
+- 判定は `correlated_suspicion`（DLLとHKCU登録が同じファイルを指す）／`indicator_present`（片方のみ）／`not_observed`（見つからない。**未感染の証明ではない**）／`not_assessed`（調べられなかった）。
+- DLLは `scan` と同じハンドルベースの読み取りで静的に調べるだけで、読み込み・実行しません。**ファイルやレジストリを削除・変更しません。** 他のユーザーのプロファイル・ハイブとAuthenticode署名は未検査として出力に明記します。
 
 ### ローカルHTMLレポート（P4-03、読み取り専用）
 

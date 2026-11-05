@@ -520,6 +520,11 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
             match verify_artifact(dir, a) {
                 Ok(bytes) if a.path.ends_with("/events.jsonl") => {
                     if bytes.is_empty() { errors.push("empty event spool".into()); continue; }
+                    if !bytes.ends_with(b"\n") || bytes.starts_with(b"\n") ||
+                        bytes.windows(2).any(|w| w == b"\n\n") {
+                        errors.push("incomplete or blank JSONL line".into());
+                        continue;
+                    }
                     for line in bytes.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
                         if line.len() > MAX_LINE { errors.push("oversized JSONL line".into()); break; }
                         match serde_json::from_slice::<Value>(line) {
@@ -561,6 +566,10 @@ pub fn summarize(expected: &Path, actual: &Path) -> LabResult<Value> {
     let started = Instant::now();
     let manifest = load_manifest(expected)?;
     let bytes = read_bounded(actual, MAX_ACTUAL)?;
+    if !bytes.is_empty() && (!bytes.ends_with(b"\n") || bytes.starts_with(b"\n") ||
+        bytes.windows(2).any(|w| w == b"\n\n")) {
+        return Err("incomplete or blank report JSONL line".into());
+    }
     let mut reports = BTreeMap::<String, Value>::new();
     let mut warnings = Vec::new();
     let mut lines = 0usize;

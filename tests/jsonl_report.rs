@@ -524,7 +524,11 @@ fn cli_output_reads_back_through_the_typed_api() {
         assert_eq!(assessment, raw["assessment"]);
         let level = serde_json::to_value(typed.signal_level()).unwrap();
         assert_eq!(level, raw["signal_level"]);
-        assert!(typed.unknown_fields.is_empty(), "{:?}", typed.unknown_fields);
+        assert!(
+            typed.unknown_fields.is_empty(),
+            "{:?}",
+            typed.unknown_fields
+        );
         if typed.nothing_found() {
             assert_eq!(raw["risk"], "low_signal");
         }

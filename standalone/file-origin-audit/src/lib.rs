@@ -156,10 +156,7 @@ pub fn inspect_fixture(path: &Path) -> Report {
         return assess(Evidence::Error("fixture_not_regular_file"), "fixture");
     }
     if before.len() > MAX_STREAM_BYTES as u64 {
-        return assess(
-            Evidence::Error("stream_size_limit_exceeded"),
-            "fixture",
-        );
+        return assess(Evidence::Error("stream_size_limit_exceeded"), "fixture");
     }
     let mut file = match File::open(path) {
         Ok(file) => file,

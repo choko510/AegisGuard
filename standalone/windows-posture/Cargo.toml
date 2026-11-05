@@ -9,3 +9,6 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 serde_json = "=1.0.154"
+
+# Keep this tool independent of the parent AegisGuard workspace.
+[workspace]

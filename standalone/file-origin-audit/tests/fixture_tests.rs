@@ -36,7 +36,11 @@ fn utf8_bom_crlf_unicode_and_unknown_key() {
 fn utf16_both_endian_variants() {
     let data = "[ZoneTransfer]\r\nZoneId=4\r\n";
     for little in [true, false] {
-        let mut bytes = if little { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
+        let mut bytes = if little {
+            vec![0xff, 0xfe]
+        } else {
+            vec![0xfe, 0xff]
+        };
         for unit in data.encode_utf16() {
             let encoded = if little {
                 unit.to_le_bytes()
@@ -84,7 +88,10 @@ fn malformed_values_do_not_become_trusted() {
 #[test]
 fn missing_section_and_missing_zone_are_not_success() {
     assert_eq!(parsed(b"ZoneId=3\n").coverage, "partial");
-    assert_eq!(parsed(b"[ZoneTransfer]\nHostUrl=https://example.test\n").coverage, "partial");
+    assert_eq!(
+        parsed(b"[ZoneTransfer]\nHostUrl=https://example.test\n").coverage,
+        "partial"
+    );
     assert_eq!(parsed(b"").coverage, "partial");
 }
 
@@ -141,8 +148,16 @@ fn missing_ads_does_not_prove_safety() {
 fn unavailable_denied_and_failed_are_distinct() {
     for (evidence, status, coverage) in [
         (Evidence::NotSupported, "not_supported", "unavailable"),
-        (Evidence::PermissionDenied, "permission_denied", "permission_denied"),
-        (Evidence::Error("file_changed_during_read"), "error", "error"),
+        (
+            Evidence::PermissionDenied,
+            "permission_denied",
+            "permission_denied",
+        ),
+        (
+            Evidence::Error("file_changed_during_read"),
+            "error",
+            "error",
+        ),
     ] {
         let report = assess(evidence, "mock");
         assert_eq!(report.status, status);

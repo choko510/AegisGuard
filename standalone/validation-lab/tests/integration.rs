@@ -247,3 +247,61 @@ fn complete_synthetic_chain_with_expected_refs_is_compared_not_called_malware() 
     assert_eq!(result["coverage"]["planned"], 1);
     assert_eq!(result["status"], "partial"); // planned means not fully implemented
 }
+
+
+#[test]
+fn unexpected_finding_in_benign_case_must_fail() {
+    let tmp = Temporary::new();
+    let dir = create(&tmp, "unexpected", 42, "benign-com");
+    let report = tmp.path().join("unexpected-findings.jsonl");
+    let actual = json!({
+        "case_id":"benign-com",
+        "rules":[{"rule_id":"AG-B002","evaluable":true}],
+        "findings":[{"rule_id":"AG-C010","event_refs":["unexpected-id"],"confidence":"high"}]
+    });
+    fs::write(&report, format!("{actual}\n")).unwrap();
+    let result = summarize(&dir.join("manifest.json"), &report).unwrap();
+    assert_eq!(result["status"], "partial");
+    assert!(result["coverage"]["failed"].as_u64().unwrap() >= 1);
+    assert!(result.to_string().contains("no_unexpected_finding"));
+}
+
+#[test]
+fn unknown_rule_must_not_be_evaluable_or_report_a_finding() {
+    let tmp = Temporary::new();
+    let dir = create(&tmp, "unknown", 42, "stale-ioc");
+    let report = tmp.path().join("unexpected-unknown.jsonl");
+    for actual in [
+        json!({"case_id":"stale-ioc","rules":[{"rule_id":"AG-C002","evaluable":true}],
+             "findings":[]}),
+        json!({"case_id":"stale-ioc","rules":[{"rule_id":"AG-C002","evaluable":false}],
+             "findings":[{"rule_id":"AG-C002","confidence":"high","event_refs":["some-event"]}]}),
+    ] {
+        fs::write(&report, format!("{actual}\n")).unwrap();
+        let result = summarize(&dir.join("manifest.json"), &report).unwrap();
+        assert_eq!(result["status"], "partial");
+        assert!(result["coverage"]["failed"].as_u64().unwrap() > 0);
+    }
+}
+
+#[test]
+fn xml_and_jsonl_must_match_even_after_rehashing_the_manifest() {
+    use sha2::{Digest, Sha256};
+    let tmp = Temporary::new();
+    let dir = create(&tmp, "semantic", 42, "benign-com");
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+    let xml_rel = manifest["cases"][0]["xml"][0]["path"].as_str().unwrap();
+    let file = dir.join(xml_rel);
+    let source = String::from_utf8(fs::read(&file).unwrap()).unwrap();
+    let altered = source.replacen("<EventID>1</EventID>", "<EventID>7</EventID>", 1);
+    assert_ne!(source, altered);
+    fs::write(&file, altered.as_bytes()).unwrap();
+    manifest["cases"][0]["xml"][0]["sha256"] =
+        json!(format!("{:x}", Sha256::digest(altered.as_bytes())));
+    manifest["cases"][0]["xml"][0]["bytes"] = json!(altered.len());
+    fs::write(dir.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let result = verify(&dir).unwrap();
+    assert_eq!(result["status"], "partial");
+    assert!(result.to_string().contains("XML/JSONL event mismatch"));
+}

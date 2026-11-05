@@ -46,26 +46,41 @@ pub fn is_driver(t: u32) -> bool {
 }
 
 pub fn kind(t: u32) -> &'static str {
-    if t & 0x01 != 0 { "kernel_driver" }
-    else if t & 0x02 != 0 { "file_system_driver" }
-    else if t & 0x08 != 0 { "recognizer_driver" }
-    else if t & 0x10 != 0 { "win32_own_process" }
-    else if t & 0x20 != 0 { "win32_shared_process" }
-    else { "unknown" }
+    if t & 0x01 != 0 {
+        "kernel_driver"
+    } else if t & 0x02 != 0 {
+        "file_system_driver"
+    } else if t & 0x08 != 0 {
+        "recognizer_driver"
+    } else if t & 0x10 != 0 {
+        "win32_own_process"
+    } else if t & 0x20 != 0 {
+        "win32_shared_process"
+    } else {
+        "unknown"
+    }
 }
 
 pub fn state(s: u32) -> &'static str {
     match s {
-        1 => "stopped", 2 => "start_pending", 3 => "stop_pending",
-        4 => "running", 5 => "continue_pending", 6 => "pause_pending",
-        7 => "paused", _ => "unknown",
+        1 => "stopped",
+        2 => "start_pending",
+        3 => "stop_pending",
+        4 => "running",
+        5 => "continue_pending",
+        6 => "pause_pending",
+        7 => "paused",
+        _ => "unknown",
     }
 }
 
 pub fn start_type(s: Option<u32>) -> &'static str {
     match s {
-        Some(0) => "boot", Some(1) => "system", Some(2) => "automatic",
-        Some(3) => "demand", Some(4) => "disabled",
+        Some(0) => "boot",
+        Some(1) => "system",
+        Some(2) => "automatic",
+        Some(3) => "demand",
+        Some(4) => "disabled",
         _ => "unknown",
     }
 }
@@ -73,8 +88,11 @@ pub fn start_type(s: Option<u32>) -> &'static str {
 pub fn sanitized_name(name: &str) -> String {
     // A service key name is useful for correlation, but control characters,
     // private command text and very long names must never reach the report.
-    if name.is_empty() || name.chars().count() > 128
-        || !name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    if name.is_empty()
+        || name.chars().count() > 128
+        || !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
     {
         "[redacted]".to_string()
     } else {
@@ -86,7 +104,9 @@ pub fn sanitized_name(name: &str) -> String {
 /// an arbitrary environment variable. Discard command-line arguments.
 pub fn normalize_image_path(raw: &str, windows_dir: &str) -> (Option<String>, &'static str) {
     let s = raw.trim();
-    if s.is_empty() { return (None, "empty_image_path"); }
+    if s.is_empty() {
+        return (None, "empty_image_path");
+    }
     if s.encode_utf16().count() > MAX_IMAGE_UNITS || s.contains('\0') {
         return (None, "image_path_limit");
     }
@@ -104,7 +124,9 @@ pub fn normalize_image_path(raw: &str, windows_dir: &str) -> (Option<String>, &'
                 return (None, "ambiguous_unquoted_path");
             }
             prefix
-        } else { s }
+        } else {
+            s
+        }
     };
     let cleaned = candidate.replace('/', r"\");
     if cleaned.split('\\').any(|p| p == ".." || p == ".") {
@@ -124,10 +146,16 @@ pub fn normalize_image_path(raw: &str, windows_dir: &str) -> (Option<String>, &'
         cleaned[r"\??\".len()..].to_string()
     } else if lower.starts_with(r"\\?\") {
         cleaned[r"\\?\".len()..].to_string()
-    } else { cleaned };
+    } else {
+        cleaned
+    };
     let chars = resolved.as_bytes();
-    if chars.len() < 3 || !chars[0].is_ascii_alphabetic() || chars[1] != b':' || chars[2] != b'\\'
-        || resolved.contains('%') || resolved.starts_with(r"\\")
+    if chars.len() < 3
+        || !chars[0].is_ascii_alphabetic()
+        || chars[1] != b':'
+        || chars[2] != b'\\'
+        || resolved.contains('%')
+        || resolved.starts_with(r"\\")
     {
         return (None, "unresolved_image_path");
     }
@@ -139,79 +167,126 @@ pub fn normalize_image_path(raw: &str, windows_dir: &str) -> (Option<String>, &'
 
 fn has_binary_suffix(s: &str) -> bool {
     let l = s.to_ascii_lowercase();
-    [".exe", ".sys", ".dll"].iter().any(|suffix| l.ends_with(suffix))
+    [".exe", ".sys", ".dll"]
+        .iter()
+        .any(|suffix| l.ends_with(suffix))
 }
 
 fn disclosed_path(path: &str, windows_dir: &str, show_paths: bool) -> String {
-    if show_paths { return path.to_string(); }
+    if show_paths {
+        return path.to_string();
+    }
     let p = path.to_ascii_lowercase();
-    let prefix = format!("{}\\", windows_dir.trim_end_matches(['\\', '/']).to_ascii_lowercase());
-    if p.starts_with(&prefix) { path.to_string() }
-    else { "[redacted_non_system_path]".to_string() }
+    let prefix = format!(
+        "{}\\",
+        windows_dir
+            .trim_end_matches(['\\', '/'])
+            .to_ascii_lowercase()
+    );
+    if p.starts_with(&prefix) {
+        path.to_string()
+    } else {
+        "[redacted_non_system_path]".to_string()
+    }
 }
 
 fn accepted_file_state(s: &str) -> Option<&'static str> {
     match s {
-        "exists" => Some("exists"), "missing" => Some("missing"),
+        "exists" => Some("exists"),
+        "missing" => Some("missing"),
         "permission_denied" => Some("permission_denied"),
-        "unknown" => Some("unknown"), "virtual" => Some("virtual"),
-        "not_checked" => Some("not_checked"), "error" => Some("error"),
+        "unknown" => Some("unknown"),
+        "virtual" => Some("virtual"),
+        "not_checked" => Some("not_checked"),
+        "error" => Some("error"),
         _ => None,
     }
 }
 fn accepted_signature(s: &str) -> Option<&'static str> {
     match s {
-        "not_checked" => Some("not_checked"), "verified_embedded" => Some("verified_embedded"),
-        "invalid" => Some("invalid"), "unknown" => Some("unknown"),
+        "not_checked" => Some("not_checked"),
+        "verified_embedded" => Some("verified_embedded"),
+        "invalid" => Some("invalid"),
+        "unknown" => Some("unknown"),
         "untrusted_chain" => Some("untrusted_chain"),
         _ => None,
     }
 }
 fn accepted_error(s: &str) -> Option<&'static str> {
     match s {
-        "permission_denied" => Some("permission_denied"), "unavailable" => Some("unavailable"),
-        "error" => Some("error"), "config_too_large" => Some("config_too_large"),
+        "permission_denied" => Some("permission_denied"),
+        "unavailable" => Some("unavailable"),
+        "error" => Some("error"),
+        "config_too_large" => Some("config_too_large"),
         _ => None,
     }
 }
 fn accepted_status(s: &str) -> Option<&'static str> {
     match s {
-        "complete" => Some("complete"), "partial" => Some("partial"),
-        "unavailable" => Some("unavailable"), "permission_denied" => Some("permission_denied"),
-        "error" => Some("error"), _ => None,
+        "complete" => Some("complete"),
+        "partial" => Some("partial"),
+        "unavailable" => Some("unavailable"),
+        "permission_denied" => Some("permission_denied"),
+        "error" => Some("error"),
+        _ => None,
     }
 }
 
 pub fn fixture(bytes: &[u8]) -> Result<Collection, &'static str> {
-    if bytes.len() > MAX_FIXTURE_BYTES { return Err("fixture_size_limit"); }
+    if bytes.len() > MAX_FIXTURE_BYTES {
+        return Err("fixture_size_limit");
+    }
     let root: Value = serde_json::from_slice(bytes).map_err(|_| "invalid_json")?;
     let obj = root.as_object().ok_or("invalid_fixture_root")?;
     if obj.get("schema_version").and_then(Value::as_u64) != Some(1) {
         return Err("unsupported_fixture_schema");
     }
-    let status = obj.get("enumeration_status")
-        .and_then(Value::as_str).and_then(accepted_status).ok_or("invalid_enumeration_status")?;
-    let list = obj.get("services").and_then(Value::as_array).ok_or("invalid_services")?;
-    if list.len() > MAX_ENTRIES { return Err("entry_limit"); }
+    let status = obj
+        .get("enumeration_status")
+        .and_then(Value::as_str)
+        .and_then(accepted_status)
+        .ok_or("invalid_enumeration_status")?;
+    let list = obj
+        .get("services")
+        .and_then(Value::as_array)
+        .ok_or("invalid_services")?;
+    if list.len() > MAX_ENTRIES {
+        return Err("entry_limit");
+    }
     let mut services = Vec::with_capacity(list.len());
     for record in list {
         let o = record.as_object().ok_or("invalid_service")?;
-        let name = o.get("name").and_then(Value::as_str).ok_or("invalid_name")?;
-        if name.encode_utf16().count() > 256 { return Err("name_limit"); }
-        let t = o.get("service_type").and_then(Value::as_u64)
-            .and_then(|n| u32::try_from(n).ok()).ok_or("invalid_service_type")?;
-        let state = o.get("state").and_then(Value::as_u64)
-            .and_then(|n| u32::try_from(n).ok()).ok_or("invalid_state")?;
+        let name = o
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or("invalid_name")?;
+        if name.encode_utf16().count() > 256 {
+            return Err("name_limit");
+        }
+        let t = o
+            .get("service_type")
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or("invalid_service_type")?;
+        let state = o
+            .get("state")
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or("invalid_state")?;
         let start = match o.get("start_type") {
             None | Some(Value::Null) => None,
-            Some(v) => Some(u32::try_from(v.as_u64().ok_or("invalid_start_type")?)
-                .map_err(|_| "invalid_start_type")?),
+            Some(v) => Some(
+                u32::try_from(v.as_u64().ok_or("invalid_start_type")?)
+                    .map_err(|_| "invalid_start_type")?,
+            ),
         };
         let image_path = match o.get("image_path") {
             None | Some(Value::Null) => None,
             Some(v) => {
                 let p = v.as_str().ok_or("invalid_image_path")?;
-                if p.encode_utf16().count() > MAX_IMAGE_UNITS { return Err("image_path_limit"); }
+                if p.encode_utf16().count() > MAX_IMAGE_UNITS {
+                    return Err("image_path_limit");
+                }
                 Some(p.to_string())
             }
         };
@@ -223,24 +298,59 @@ pub fn fixture(bytes: &[u8]) -> Result<Collection, &'static str> {
             None | Some(Value::Null) => None,
             Some(v) => {
                 let n = v.as_u64().ok_or("invalid_dependency_count")?;
-                if n > 64 { return Err("dependency_limit"); }
+                if n > 64 {
+                    return Err("dependency_limit");
+                }
                 Some(n as usize)
             }
         };
-        let config_error = o.get("config_error").filter(|v| !v.is_null())
-            .map(|v| v.as_str().and_then(accepted_error).ok_or("invalid_config_error"))
+        let config_error = o
+            .get("config_error")
+            .filter(|v| !v.is_null())
+            .map(|v| {
+                v.as_str()
+                    .and_then(accepted_error)
+                    .ok_or("invalid_config_error")
+            })
             .transpose()?;
-        let file_state = o.get("file_state").filter(|v| !v.is_null())
-            .map(|v| v.as_str().and_then(accepted_file_state).ok_or("invalid_file_state"))
+        let file_state = o
+            .get("file_state")
+            .filter(|v| !v.is_null())
+            .map(|v| {
+                v.as_str()
+                    .and_then(accepted_file_state)
+                    .ok_or("invalid_file_state")
+            })
             .transpose()?;
-        let signature = o.get("signature").filter(|v| !v.is_null())
-            .map(|v| v.as_str().and_then(accepted_signature).ok_or("invalid_signature"))
+        let signature = o
+            .get("signature")
+            .filter(|v| !v.is_null())
+            .map(|v| {
+                v.as_str()
+                    .and_then(accepted_signature)
+                    .ok_or("invalid_signature")
+            })
             .transpose()?;
-        services.push(RawService { name: name.to_string(), evidence_source: "fixture", service_type: t,
-            state, start_type: start, image_path, delayed_auto_start: delayed,
-            dependency_count, config_error, file_state, signature });
+        services.push(RawService {
+            name: name.to_string(),
+            evidence_source: "fixture",
+            service_type: t,
+            state,
+            start_type: start,
+            image_path,
+            delayed_auto_start: delayed,
+            dependency_count,
+            config_error,
+            file_state,
+            signature,
+        });
     }
-    Ok(Collection { services, enumeration_status: status, error_code: None, pages: 0 })
+    Ok(Collection {
+        services,
+        enumeration_status: status,
+        error_code: None,
+        pages: 0,
+    })
 }
 
 pub fn error_report(code: &'static str) -> Value {
@@ -256,7 +366,12 @@ pub fn error_report(code: &'static str) -> Value {
 
 /// No probing occurs for fixtures, even if a fixture mentions a real OS path.
 /// Live probes are performed by the Windows backend and supplied as evidence.
-pub fn report(collection: Collection, drivers_only: bool, show_paths: bool, windows_dir: &str) -> Value {
+pub fn report(
+    collection: Collection,
+    drivers_only: bool,
+    show_paths: bool,
+    windows_dir: &str,
+) -> Value {
     let enumerated = collection.services.len();
     let mut entries = Vec::new();
     let mut warnings = vec!["scm_permission_filtered_possible".to_string()];
@@ -264,10 +379,17 @@ pub fn report(collection: Collection, drivers_only: bool, show_paths: bool, wind
     let mut partial = false;
     let mut truncated = false;
     for s in collection.services {
-        if drivers_only && !is_driver(s.service_type) { continue; }
-        if entries.len() >= MAX_ENTRIES { truncated = true; break; }
+        if drivers_only && !is_driver(s.service_type) {
+            continue;
+        }
+        if entries.len() >= MAX_ENTRIES {
+            truncated = true;
+            break;
+        }
         let service_name = sanitized_name(&s.name);
-        if service_name == "[redacted]" { partial = true; }
+        if service_name == "[redacted]" {
+            partial = true;
+        }
         if !seen.insert(s.name.to_lowercase()) {
             partial = true;
             warnings.push("duplicate_service_name".into());
@@ -280,11 +402,23 @@ pub fn report(collection: Collection, drivers_only: bool, show_paths: bool, wind
         let file_state = s.file_state.unwrap_or("not_checked");
         let signature = s.signature.unwrap_or("not_checked");
         let mut indicators: Vec<&str> = Vec::new();
-        if normalized.is_none() { indicators.push(path_reason); partial = true; }
-        if file_state == "missing" { indicators.push("file_missing_review"); }
-        if signature == "invalid" { indicators.push("invalid_embedded_signature_review"); }
-        if s.config_error.is_some() { partial = true; indicators.push("config_not_assessed"); }
-        if matches!(file_state, "permission_denied" | "error") { partial = true; }
+        if normalized.is_none() {
+            indicators.push(path_reason);
+            partial = true;
+        }
+        if file_state == "missing" {
+            indicators.push("file_missing_review");
+        }
+        if signature == "invalid" {
+            indicators.push("invalid_embedded_signature_review");
+        }
+        if s.config_error.is_some() {
+            partial = true;
+            indicators.push("config_not_assessed");
+        }
+        if matches!(file_state, "permission_denied" | "error") {
+            partial = true;
+        }
         let is_fixture = s.evidence_source == "fixture";
         entries.push(json!({
             "service_name": service_name, "kind": kind(s.service_type),
@@ -312,9 +446,16 @@ pub fn report(collection: Collection, drivers_only: bool, show_paths: bool, wind
             "source": s.evidence_source
         }));
     }
-    if truncated { partial = true; warnings.push("entry_limit".into()); }
-    if let Some(e) = collection.error_code { warnings.push(e.to_string()); }
-    if partial { warnings.push("entry_metadata_incomplete".into()); }
+    if truncated {
+        partial = true;
+        warnings.push("entry_limit".into());
+    }
+    if let Some(e) = collection.error_code {
+        warnings.push(e.to_string());
+    }
+    if partial {
+        warnings.push("entry_metadata_incomplete".into());
+    }
     let status = match collection.enumeration_status {
         "complete" if !partial => "complete",
         "complete" | "partial" => "partial",
@@ -338,25 +479,39 @@ pub fn report(collection: Collection, drivers_only: bool, show_paths: bool, wind
 /// Validate and count a bounded Windows MULTI_SZ (double-NUL terminated).
 /// Only the count is emitted; dependency names may reveal private software.
 pub fn count_multisz_units(units: &[u16]) -> Result<usize, &'static str> {
-    if units.len() > 1024 { return Err("multisz_limit"); }
+    if units.len() > 1024 {
+        return Err("multisz_limit");
+    }
     let mut offset = 0;
     let mut count = 0;
     loop {
-        if offset >= units.len() { return Err("multisz_missing_terminator"); }
-        let end = units[offset..].iter().position(|&unit| unit == 0)
-            .map(|n| n + offset).ok_or("multisz_missing_terminator")?;
-        if end == offset { return Ok(count); }
+        if offset >= units.len() {
+            return Err("multisz_missing_terminator");
+        }
+        let end = units[offset..]
+            .iter()
+            .position(|&unit| unit == 0)
+            .map(|n| n + offset)
+            .ok_or("multisz_missing_terminator")?;
+        if end == offset {
+            return Ok(count);
+        }
         String::from_utf16(&units[offset..end]).map_err(|_| "multisz_invalid_utf16")?;
         count += 1;
-        if count > 64 { return Err("dependency_limit"); }
+        if count > 64 {
+            return Err("dependency_limit");
+        }
         offset = end + 1;
     }
 }
 
 /// Model the SCM pagination contract without OS calls, for deterministic tests.
-pub fn next_page(code: u32, returned: usize, previous_resume: u32, resume: u32)
-    -> Result<bool, &'static str>
-{
+pub fn next_page(
+    code: u32,
+    returned: usize,
+    previous_resume: u32,
+    resume: u32,
+) -> Result<bool, &'static str> {
     match code {
         0 => Ok(false),
         234 if returned > 0 && resume != 0 && resume != previous_resume => Ok(true),
@@ -371,30 +526,53 @@ mod tests {
     use super::*;
     #[test]
     fn types_and_states() {
-        assert!(is_driver(1)); assert!(is_driver(2)); assert!(is_driver(8));
-        assert!(!is_driver(16)); assert_eq!(kind(32), "win32_shared_process");
-        assert_eq!(state(4), "running"); assert_eq!(state(1), "stopped");
-        assert_eq!(start_type(Some(0)), "boot"); assert_eq!(start_type(Some(4)), "disabled");
+        assert!(is_driver(1));
+        assert!(is_driver(2));
+        assert!(is_driver(8));
+        assert!(!is_driver(16));
+        assert_eq!(kind(32), "win32_shared_process");
+        assert_eq!(state(4), "running");
+        assert_eq!(state(1), "stopped");
+        assert_eq!(start_type(Some(0)), "boot");
+        assert_eq!(start_type(Some(4)), "disabled");
     }
     #[test]
     fn normalization_is_conservative() {
         let win = r"C:\Windows";
-        assert_eq!(normalize_image_path(r"\SystemRoot\System32\drivers\x.sys", win).0,
-            Some(r"C:\Windows\System32\drivers\x.sys".to_string()));
-        assert_eq!(normalize_image_path(r#""C:\Program Files\A\svc.exe" --secret KEY"#, win).0,
-            Some(r"C:\Program Files\A\svc.exe".into()));
-        assert_eq!(normalize_image_path(r"C:\Program Files\A\svc.exe --token secret", win).1,
-            "ambiguous_unquoted_path");
-        assert_eq!(normalize_image_path(r"%TEMP%\x.sys", win).1, "unresolved_image_path");
-        assert_eq!(normalize_image_path(r"C:\Windows\..\evil.sys", win).1, "relative_component");
+        assert_eq!(
+            normalize_image_path(r"\SystemRoot\System32\drivers\x.sys", win).0,
+            Some(r"C:\Windows\System32\drivers\x.sys".to_string())
+        );
+        assert_eq!(
+            normalize_image_path(r#""C:\Program Files\A\svc.exe" --secret KEY"#, win).0,
+            Some(r"C:\Program Files\A\svc.exe".into())
+        );
+        assert_eq!(
+            normalize_image_path(r"C:\Program Files\A\svc.exe --token secret", win).1,
+            "ambiguous_unquoted_path"
+        );
+        assert_eq!(
+            normalize_image_path(r"%TEMP%\x.sys", win).1,
+            "unresolved_image_path"
+        );
+        assert_eq!(
+            normalize_image_path(r"C:\Windows\..\evil.sys", win).1,
+            "relative_component"
+        );
     }
     #[test]
     fn multisz_handles_unicode_and_malformed_termination() {
         let valid: Vec<u16> = "Net\0日本語\0\0".encode_utf16().collect();
         assert_eq!(count_multisz_units(&valid), Ok(2));
         assert_eq!(count_multisz_units(&[0, 0]), Ok(0));
-        assert_eq!(count_multisz_units(&[65, 0]), Err("multisz_missing_terminator"));
-        assert_eq!(count_multisz_units(&[0xd800, 0, 0]), Err("multisz_invalid_utf16"));
+        assert_eq!(
+            count_multisz_units(&[65, 0]),
+            Err("multisz_missing_terminator")
+        );
+        assert_eq!(
+            count_multisz_units(&[0xd800, 0, 0]),
+            Err("multisz_invalid_utf16")
+        );
         assert_eq!(count_multisz_units(&vec![1; 1025]), Err("multisz_limit"));
     }
     #[test]

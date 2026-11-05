@@ -98,6 +98,11 @@ enum Commands {
         #[command(subcommand)]
         command: DefenderCommand,
     },
+    /// Run or manage the read-only monitoring service (Windows).
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
     /// Build a read-only local HTML report from saved command outputs.
     Report {
         #[command(subcommand)]
@@ -295,6 +300,35 @@ enum BrowserCommand {
         /// Use this folder instead of %LOCALAPPDATA% (e.g. a copied profile).
         #[arg(long)]
         local_app_data: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceCommand {
+    /// Entry point used by the Service Control Manager (not for manual use).
+    Run {
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+    /// Run the same loop in the foreground as the current user (Ctrl-C stops).
+    Console {
+        #[arg(long, default_value = "data/service")]
+        data_dir: PathBuf,
+    },
+    /// Create the service entry as LocalService (administrator rights required).
+    Install {
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+        /// Start automatically at boot (default: manual start).
+        #[arg(long)]
+        auto_start: bool,
+    },
+    /// Stop and remove the service entry (data is kept).
+    Uninstall,
+    /// Show the SCM state and the service's own state file.
+    Status {
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
     },
 }
 
@@ -546,6 +580,77 @@ fn run_fim(command: FimCommand) -> Result<()> {
     Ok(())
 }
 
+/// Tick work used by the service. Collection is added in P8-02.
+fn service_work() -> Box<dyn aegisguard::service::TickWork + Send> {
+    Box::new(aegisguard::service::NoWork)
+}
+
+fn run_service(command: ServiceCommand) -> Result<()> {
+    use aegisguard::service::{self, Layout, RunMode, ServiceState};
+    match command {
+        ServiceCommand::Console { data_dir } => {
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = stop.clone();
+            ctrlc::set_handler(move || flag.store(true, std::sync::atomic::Ordering::SeqCst))?;
+            let layout = Layout::new(data_dir);
+            let mut work = service_work();
+            eprintln!(
+                "AegisGuard service loop in console mode (data: {}); Ctrl-C to stop",
+                layout.data_dir.display()
+            );
+            let state = service::run(&layout, RunMode::Console, &stop, work.as_mut(), &mut || {})?;
+            print_json(&state)?;
+        }
+        #[cfg(windows)]
+        ServiceCommand::Run { data_dir } => {
+            let layout = Layout::new(data_dir.unwrap_or_else(service::default_data_dir));
+            service::scm::dispatch(layout, service_work)?;
+        }
+        #[cfg(windows)]
+        ServiceCommand::Install {
+            data_dir,
+            auto_start,
+        } => {
+            let exe = std::env::current_exe()?;
+            let data_dir = data_dir.unwrap_or_else(service::default_data_dir);
+            service::scm::install(&exe, &data_dir, auto_start)?;
+            print_json(
+                &serde_json::json!({"status": "installed", "data_dir": data_dir.display().to_string(), "auto_start": auto_start, "account": r"NT AUTHORITY\LocalService"}),
+            )?;
+        }
+        #[cfg(windows)]
+        ServiceCommand::Uninstall => {
+            service::scm::uninstall()?;
+            print_json(
+                &serde_json::json!({"status": "uninstalled", "note": "the data directory was kept"}),
+            )?;
+        }
+        #[cfg(not(windows))]
+        ServiceCommand::Run { .. } | ServiceCommand::Install { .. } | ServiceCommand::Uninstall => {
+            return Err(
+                "the Windows service is only available on Windows; use `service console`".into(),
+            );
+        }
+        ServiceCommand::Status { data_dir } => {
+            let data_dir = data_dir.unwrap_or_else(service::default_data_dir);
+            #[cfg(windows)]
+            let scm = service::scm::query().unwrap_or("unknown");
+            #[cfg(not(windows))]
+            let scm = "not_windows";
+            let state = ServiceState::load(&Layout::new(data_dir.clone()).state());
+            let now = aegisguard::model::now_unix_ms();
+            print_json(&serde_json::json!({
+                "scm": scm,
+                "data_dir": data_dir.display().to_string(),
+                "state": state.as_ref().ok().and_then(|s| s.as_ref()),
+                "state_error": state.as_ref().err().map(|e| e.to_string()),
+                "stale": state.as_ref().ok().and_then(|s| s.as_ref()).is_none_or(|s| s.is_stale(now)),
+            }))?;
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -692,6 +797,7 @@ fn main() -> Result<()> {
             let report = aegisguard::browser::check_k2f(local.as_deref(), &registry);
             print_json(&report)?;
         }
+        Commands::Service { command } => run_service(command)?,
         Commands::Defender {
             command: DefenderCommand::Audit { from_json },
         } => {

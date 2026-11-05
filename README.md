@@ -216,6 +216,19 @@ aegisguard fim watch --db data\fim\baseline.json --duration-secs 600   # Windows
 - ブラウザーの認証情報・Cookieのファイル（`Login Data`、`Cookies`、`key4.db`、`logins.json` 等）やレジストリハイブは**開かず**、`excluded_sensitive` として記録だけします。
 - FIMは変更しか見えません。ファイルを読み取って持ち出す行為（変更を伴わないもの）は検出できません。
 
+### 常駐サービス（P8、観察のみ）
+
+```powershell
+aegisguard service console --data-dir data\service     # 一般ユーザーで前面実行（Ctrl-Cで停止）
+aegisguard service install [--auto-start]              # 管理者権限が必要。LocalServiceとして登録
+aegisguard service status                              # SCMの状態とサービス自身の状態ファイル
+aegisguard service uninstall                           # 停止して登録を削除（データは残す）
+```
+
+- サービスは**観察だけ**を行い、Defender・Firewall・Sysmon・OSの設定を変更せず、削除・隔離もしません。GUIから任意のパスを検査させることはできません（利用者がサービスの権限でファイルを読めないようにするため）。
+- 登録時は `NT AUTHORITY\LocalService`、サービスSID付き、必要な特権は `SeChangeNotifyPrivilege` だけ、既定は手動起動、異常終了時は60秒/5分後に再起動します。Sysmonのログを読むにはLocalSystemまたはEvent Log Readersが必要で、読めない場合は状態に `access_denied` と出ます（「イベントなし」とは扱いません）。
+- 状態は `%ProgramData%\AegisGuard\state.json` に毎回原子的に保存します。設定ファイル（`config.json`）が壊れていれば既定値で動き、そのことを状態に記録します。最終更新が間隔の3倍以上古い状態は「停止・不明」とみなします。
+
 ### デスクトップUI（P7、egui/eframe、読み取り専用）
 
 ```powershell

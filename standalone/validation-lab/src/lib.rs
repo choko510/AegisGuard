@@ -1,5 +1,7 @@
 //! Purely synthetic, non-executing Sysmon fixture generator and verifier.
 //! No Windows API, registry, networking, process execution or malware samples.
+use quick_xml::events::{BytesStart, Event as XmlEvent};
+use quick_xml::{Reader, XmlVersion};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -488,6 +490,112 @@ fn verify_artifact(root: &Path, artifact: &Artifact) -> LabResult<Vec<u8>> {
     Ok(bytes)
 }
 
+
+/// Parse the strictly bounded synthetic Sysmon XML and reconstruct the exact
+/// JSON envelope expected for that event. XML is never executed or sent to OS.
+fn xml_attr(e: &BytesStart<'_>, name: &[u8]) -> Option<String> {
+    e.attributes()
+        .flatten()
+        .find(|a| a.key.as_ref() == name)
+        .and_then(|a| a.normalized_value(XmlVersion::Implicit1_0).ok().map(|v| v.into_owned()))
+}
+
+fn parse_synthetic_xml(bytes: &[u8]) -> LabResult<Value> {
+    if bytes.len() as u64 > MAX_ARTIFACT {
+        return Err("synthetic XML size exceeded".into());
+    }
+    let xml = std::str::from_utf8(bytes).map_err(|_| "synthetic XML is not UTF-8")?;
+    let mut reader = Reader::from_str(xml);
+    let mut path: Vec<Vec<u8>> = Vec::new();
+    let mut provider = String::new();
+    let mut channel = String::new();
+    let mut stamp = String::new();
+    let mut event_id = None;
+    let mut record = None;
+    let mut field_name: Option<String> = None;
+    let mut fields = BTreeMap::new();
+    let mut text = String::new();
+    loop {
+        match reader.read_event().map_err(|_| "invalid synthetic XML")? {
+            XmlEvent::Start(e) => {
+                let tag = e.local_name().as_ref().to_vec();
+                if tag.as_slice() == b"Data" {
+                    if path.last().is_none_or(|p| p.as_slice() != b"EventData") {
+                        return Err("Data outside EventData".into());
+                    }
+                    field_name = Some(xml_attr(&e, b"Name").ok_or("Data missing Name")?);
+                }
+                if tag.as_slice() == b"Provider" {
+                    provider = xml_attr(&e, b"Name").ok_or("Provider missing Name")?;
+                }
+                if tag.as_slice() == b"TimeCreated" {
+                    stamp = xml_attr(&e, b"SystemTime").ok_or("TimeCreated missing SystemTime")?;
+                }
+                path.push(tag);
+                text.clear();
+            }
+            XmlEvent::Empty(e) => {
+                match e.local_name().as_ref() {
+                    b"Provider" => provider = xml_attr(&e, b"Name").ok_or("Provider missing Name")?,
+                    b"TimeCreated" => stamp = xml_attr(&e, b"SystemTime").ok_or("TimeCreated missing SystemTime")?,
+                    _ => return Err("unsupported empty synthetic XML tag".into()),
+                }
+            }
+            XmlEvent::Text(t) => text.push_str(
+                &t.xml10_content().map_err(|_| "invalid XML text")?
+            ),
+            XmlEvent::GeneralRef(r) => match r.resolve_char_ref().map_err(|_| "invalid character reference")? {
+                Some(c) => text.push(c),
+                None => {
+                    let entity = r.decode().map_err(|_| "invalid XML entity")?;
+                    text.push_str(match entity.as_ref() {
+                        "amp" => "&", "lt" => "<", "gt" => ">",
+                        "quot" => "\"", "apos" => "'",
+                        _ => return Err("unknown XML entity".into()),
+                    });
+                }
+            },
+            XmlEvent::End(e) => {
+                let tag = path.pop().ok_or("unbalanced synthetic XML")?;
+                if e.local_name().as_ref() != tag {
+                    return Err("mismatched synthetic XML tag".into());
+                }
+                let in_system = path.last().is_some_and(|p| p.as_slice() == b"System");
+                match (tag.as_slice(), in_system) {
+                    (b"EventID", true) => event_id = text.trim().parse::<u32>().ok(),
+                    (b"EventRecordID", true) => record = text.trim().parse::<u64>().ok(),
+                    (b"Channel", true) => channel = text.trim().to_owned(),
+                    (b"Data", _) => {
+                        let key = field_name.take().ok_or("Data missing name")?;
+                        if fields.insert(key, std::mem::take(&mut text)).is_some() {
+                            return Err("duplicate synthetic XML field".into());
+                        }
+                    }
+                    _ => {}
+                }
+                text.clear();
+            }
+            XmlEvent::Eof => break,
+            _ => return Err("unsupported synthetic XML event".into()),
+        }
+    }
+    if !path.is_empty() || provider != PROVIDER || channel != CHANNEL {
+        return Err("incomplete or wrong-provider synthetic XML".into());
+    }
+    let sec = stamp.strip_prefix("2026-11-05T10:00:")
+        .and_then(|t| t.strip_suffix('Z'))
+        .and_then(|t| t.parse::<u8>().ok())
+        .filter(|s| *s < 60)
+        .ok_or("unexpected synthetic XML timestamp")?;
+    let event = Event {
+        event_id: event_id.ok_or("missing EventID")?,
+        record: record.ok_or("missing EventRecordID")?,
+        sec,
+        fields,
+    };
+    Ok(event.envelope())
+}
+
 pub fn verify(dir: &Path) -> LabResult<Value> {
     let meta = fs::symlink_metadata(dir).map_err(|e| format!("fixture directory not accessible: {:?}",e.kind()))?;
     if !meta.is_dir() || meta.file_type().is_symlink() || is_reparse(&meta) {
@@ -507,6 +615,8 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
     for case in &manifest.cases {
         let mut event_uids = BTreeSet::new();
         let mut event_lines = 0usize;
+        let mut json_events = Vec::new();
+        let mut xml_events = BTreeMap::new();
         if started.elapsed() > LIMIT { return Err("verification time budget exceeded".into()); }
         let mut all = case.xml.clone();
         all.push(case.events.clone());
@@ -538,6 +648,14 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
                         }
                     }
                 }
+                Ok(bytes) if a.path.ends_with(".xml") => {
+                    match parse_synthetic_xml(&bytes) {
+                        Ok(envelope) => {
+                            xml_events.insert(a.path.clone(), envelope);
+                        }
+                        Err(_) => errors.push(format!("invalid synthetic XML in {}", a.path)),
+                    }
+                }
                 Ok(bytes) if a.path == "stale-ioc/expired-ioc.json" => {
                     match serde_json::from_slice::<Value>(&bytes) {
                         Ok(v) if v["expires_at_unix_ms"].as_u64().is_some_and(|t| t < BASE_MS)
@@ -550,6 +668,11 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
                 Err(e) => errors.push(e),
             }
         }
+        for (index, file) in case.xml.iter().enumerate() {
+            if xml_events.get(&file.path) != json_events.get(index) {
+                errors.push(format!("XML/JSONL event mismatch in {} at {}", case.case_id, index));
+            }
+        }
         if event_lines != case.xml.len() {
             errors.push(format!("event/XML count mismatch in {}",case.case_id));
         }
@@ -559,7 +682,7 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
     }
     if num > MAX_CASES * MAX_EVENTS { errors.push("too many event lines".into()); }
     let status = if errors.is_empty() { "complete" } else { "partial" };
-    Ok(output(status, json!({"cases":manifest.cases.len(),"events":num}), errors, json!({"verification":"hash_and_schema_only","malware_executed":false})))
+    Ok(output(status, json!({"cases":manifest.cases.len(),"events":num}), errors, json!({"verification":"normalized_xml_jsonl_and_hash","malware_executed":false})))
 }
 
 pub fn summarize(expected: &Path, actual: &Path) -> LabResult<Value> {

@@ -107,7 +107,7 @@ fn collect_source(id: &str, root: Hkey, view: u32) -> SourceData {
         };
         let publisher = match text(&child, "Publisher") {
             Ok(v) => v,
-            Err(()) => { data.status = "partial".into(); None }
+            Err(_) => { data.status = "partial".into(); None }
         };
         // Registry view does not prove executable architecture.
         data.entries.push(RawEntry { name, version, publisher, architecture: None, edition: None });

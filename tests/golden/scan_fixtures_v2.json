@@ -18,6 +18,9 @@
       "version": "0.1.0"
     },
     "file_identity": {
+      "device_id": "<volatile>",
+      "file_id": "<volatile>",
+      "link_count": 1,
       "modified_unix_ms": "<volatile>",
       "observed_via": "handle_metadata",
       "size_bytes": 568
@@ -57,6 +60,9 @@
       "version": "0.1.0"
     },
     "file_identity": {
+      "device_id": "<volatile>",
+      "file_id": "<volatile>",
+      "link_count": 1,
       "modified_unix_ms": "<volatile>",
       "observed_via": "handle_metadata",
       "size_bytes": 21
@@ -94,6 +100,9 @@
       "version": "0.1.0"
     },
     "file_identity": {
+      "device_id": "<volatile>",
+      "file_id": "<volatile>",
+      "link_count": 1,
       "modified_unix_ms": "<volatile>",
       "observed_via": "handle_metadata",
       "size_bytes": 286
@@ -137,6 +146,9 @@
       "version": "0.1.0"
     },
     "file_identity": {
+      "device_id": "<volatile>",
+      "file_id": "<volatile>",
+      "link_count": 1,
       "modified_unix_ms": "<volatile>",
       "observed_via": "handle_metadata",
       "size_bytes": 2

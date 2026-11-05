@@ -57,7 +57,9 @@ fn normalize(mut report: Value) -> Value {
     report["started_at_unix_ms"] = "<volatile>".into();
     report["completed_at_unix_ms"] = "<volatile>".into();
     if let Some(identity) = report["file_identity"].as_object_mut() {
-        identity.insert("modified_unix_ms".into(), "<volatile>".into());
+        for key in ["modified_unix_ms", "device_id", "file_id"] {
+            identity.insert(key.into(), "<volatile>".into());
+        }
     }
     report
 }
@@ -225,5 +227,36 @@ fn symlinks_and_unreadable_directories_are_reported_not_dropped() {
     for report in &run.reports {
         assert_v1_compatible(report);
         assert_completeness_contract(report);
+    }
+}
+
+#[test]
+fn handle_identity_is_recorded_and_stable_across_scans() {
+    let target = format!("{FIXTURES}/benign.py");
+    let first = &scan(&[&target]).reports[0];
+    let second = &scan(&[&target]).reports[0];
+    let identity = &first["file_identity"];
+    assert_eq!(identity["observed_via"], "handle_metadata");
+    assert!(identity["device_id"].is_u64() && identity["file_id"].is_u64());
+    assert!(identity["link_count"].as_u64().is_some_and(|n| n >= 1));
+    assert_eq!(identity["device_id"], second["file_identity"]["device_id"]);
+    assert_eq!(identity["file_id"], second["file_identity"]["file_id"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_file_is_not_assessed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("denied");
+    let path = dir.join("denied.py");
+    fs::write(&path, "print(1)\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let enforced = fs::File::open(&path).is_err();
+    let run = scan(&[path.to_str().unwrap()]);
+    fs::remove_dir_all(&dir).unwrap();
+    let report = &run.reports[0];
+    assert_completeness_contract(report);
+    if enforced {
+        assert_eq!(report["not_assessed_reason"], "open_failed");
     }
 }

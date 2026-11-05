@@ -1,5 +1,5 @@
 use crate::model::{Assessment, FileIdentity, Report};
-use crate::{pe, script, Result};
+use crate::{fsafe, pe, script, Result};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -73,18 +73,70 @@ pub fn scan_file(path: &Path) -> Report {
         return report;
     }
 
-    let file = match File::open(path) {
-        Ok(f) => f,
+    // Resolve the parent once; the handle's final path must match it, so a
+    // directory swapped for a junction/symlink after this point is detected.
+    let expected = match fsafe::expected_path(path) {
+        Ok(p) => p,
         Err(e) => {
+            report.unavailable("unreadable", "metadata_failed", e.to_string());
+            return report;
+        }
+    };
+    let (file, before) = match fsafe::open_regular(path) {
+        Ok(opened) => opened,
+        Err(fsafe::OpenFailure::Link) => {
+            report.unavailable(
+                "unreadable",
+                "symlink_not_followed",
+                "The file was replaced by a link or reparse point",
+            );
+            return report;
+        }
+        Err(fsafe::OpenFailure::NotRegular) => {
+            report.unavailable(
+                "unreadable",
+                "not_regular_file",
+                "Not a regular file or is a symlink",
+            );
+            return report;
+        }
+        Err(fsafe::OpenFailure::Io(e)) => {
             report.unavailable("unreadable", "open_failed", e.to_string());
             return report;
         }
     };
-    if let Ok(handle_meta) = file.metadata() {
-        report.file_identity = Some(FileIdentity::from_metadata(&handle_meta, "handle_metadata"));
+    let mut identity = FileIdentity::from_metadata(&before, "handle_metadata");
+    let id = match fsafe::handle_id(&file) {
+        Ok(id) => id,
+        Err(e) => {
+            report.file_identity = Some(identity);
+            report.unavailable("unreadable", "identity_unavailable", e.to_string());
+            return report;
+        }
+    };
+    identity.device_id = Some(id.device);
+    identity.file_id = Some(id.file);
+    identity.link_count = Some(id.links);
+    report.file_identity = Some(identity);
+    if fsafe::final_path(&file).is_some_and(|actual| !fsafe::same_path(&actual, &expected)) {
+        report.unavailable(
+            "unreadable",
+            "path_identity_mismatch",
+            "The opened file does not resolve to the requested path",
+        );
+        return report;
     }
+    if before.len() > limit {
+        report.unavailable(
+            "oversized_no_deep_scan",
+            "size_limit_exceeded",
+            "Size exceeds the configured deep-scan limit",
+        );
+        return report;
+    }
+
     let mut data = Vec::new();
-    let read = file.take(limit + 1).read_to_end(&mut data);
+    let read = (&file).take(limit + 1).read_to_end(&mut data);
     report.coverage.bytes_read = data.len() as u64;
     if let Err(e) = read {
         report.unavailable("unreadable", "read_failed", e.to_string());
@@ -95,6 +147,20 @@ pub fn scan_file(path: &Path) -> Report {
             "oversized_no_deep_scan",
             "file_grew_during_read",
             "File grew past the scan limit",
+        );
+        return report;
+    }
+    // The bytes are only attributed to `path` if the file did not change while
+    // being read and the path still names the same file afterwards.
+    let stable = file
+        .metadata()
+        .is_ok_and(|after| fsafe::unchanged(&before, &after))
+        && data.len() as u64 == before.len();
+    if !stable || !fsafe::path_refers_to(path, &id) {
+        report.unavailable(
+            "unreadable",
+            "file_changed_during_scan",
+            "The file was modified, replaced or removed while it was being read",
         );
         return report;
     }

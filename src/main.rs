@@ -1,4 +1,5 @@
 mod c2;
+mod fsafe;
 mod model;
 mod pe;
 mod scan;

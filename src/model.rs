@@ -69,13 +69,18 @@ pub struct Coverage {
     pub analyzers: Vec<&'static str>,
 }
 
-/// Metadata of the scanned object. `observed_via` states whether it came from
-/// the path (before open) or the opened handle; it is not yet a TOCTOU-proof identity.
+/// Metadata of the scanned object. `observed_via` is `path_metadata` when the
+/// file was never opened, otherwise `handle_metadata`. `device_id`/`file_id`
+/// come from the opened handle (volume serial + file index on Windows,
+/// dev + inode on Unix) and were re-checked against the path after reading.
 #[derive(Debug, Serialize)]
 pub struct FileIdentity {
     pub observed_via: &'static str,
     pub size_bytes: u64,
     pub modified_unix_ms: Option<u64>,
+    pub device_id: Option<u64>,
+    pub file_id: Option<u64>,
+    pub link_count: Option<u64>,
 }
 
 impl FileIdentity {
@@ -88,6 +93,9 @@ impl FileIdentity {
                 .ok()
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .and_then(|d| u64::try_from(d.as_millis()).ok()),
+            device_id: None,
+            file_id: None,
+            link_count: None,
         }
     }
 }

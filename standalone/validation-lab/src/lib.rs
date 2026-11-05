@@ -489,12 +489,19 @@ fn verify_artifact(root: &Path, artifact: &Artifact) -> LabResult<Vec<u8>> {
 }
 
 pub fn verify(dir: &Path) -> LabResult<Value> {
-    let meta = fs::symlink_metadata(dir).map_err(|_| "fixture directory not accessible")?;
+    let meta = fs::symlink_metadata(dir).map_err(|e| format!("fixture directory not accessible: {:?}",e.kind()))?;
     if !meta.is_dir() || meta.file_type().is_symlink() || is_reparse(&meta) {
         return Err("fixture root must be a real directory".into());
     }
     let started = Instant::now();
     let manifest = load_manifest(&dir.join("manifest.json"))?;
+    let total_claimed: u64 = manifest.cases.iter().flat_map(|c| {
+        c.xml.iter().chain(c.extra.iter()).chain(std::iter::once(&c.events))
+    }).try_fold(0u64, |sum, a| sum.checked_add(a.bytes))
+        .ok_or("manifest byte count overflow")?;
+    if total_claimed > 16 * 1024 * 1024 {
+        return Err("aggregate fixture size exceeds 16 MiB".into());
+    }
     let mut num = 0usize;
     let mut errors = Vec::new();
     for case in &manifest.cases {
@@ -564,6 +571,9 @@ pub fn summarize(expected: &Path, actual: &Path) -> LabResult<Value> {
         let v: Value = serde_json::from_slice(line).map_err(|_| "invalid report JSONL")?;
         if v.get("schema_version").is_some() && v["schema_version"] != VERSION {
             return Err("unknown actual report schema".into());
+        }
+        if v.get("ruleset_version").is_some() && v["ruleset_version"] != 2 {
+            return Err("unknown AegisGuard correlation ruleset version".into());
         }
         let case_id = v["case_id"].as_str().or_else(|| {
             if manifest.cases.len() == 1 { Some(manifest.cases[0].case_id.as_str()) } else { None }

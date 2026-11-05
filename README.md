@@ -73,6 +73,10 @@ Windowsサービス、Sysmonイベント1/3/7の購読とProcessGuid相関、AMS
 
 フィードのデータそのものはリポジトリに同梱・再配布しません。
 
+## 外部ツールの導入調査（AI並列調査プロンプト）
+
+Loki-RS、Portmaster、Wazuh、ClamAV、YARA-X、simplewall、ConfigureDefenderの採用可否を、15担当のAI＋1統合担当で調べるための[調査ガイドと個別プロンプト](docs/research/README.md)を用意しています。各AIは結果だけを独立したMarkdownとPRで提出し、ソース実装・マージは行いません。
+
 ## セキュリティ方針
 
 無断で検体をアップロードしない、自動削除しない、Defenderの保護を弱めない、テレメトリーを外部送信しない設計です。既知の設計上の制約は [SECURITY.md](SECURITY.md) にまとめています。初期開発段階のため、信頼できない検体を手元で**実行しないでください**。

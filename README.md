@@ -161,6 +161,17 @@ aegisguard policy approve plans\plan-001.json --approver "admin" --note "ticket 
 - 次は候補にせず、理由付きで `rejected` に入れます：プロセス不明、共有のシステムプロセス（svchost・lsass・explorer・Defender等）、DNS名だけの根拠、期限切れの根拠、利用者の例外、共有の宛先、調査用ソース（C2IntelFeeds）だけの根拠、確度不足、非公開アドレス、上限超過。
 - `approve` は承認を監査ログ（`data\policy\audit.jsonl`）に追記するだけで、適用しません。計画ファイルは上書きしません。
 
+### Microsoft Defenderの読み取り専用監査（P4-02）
+
+```powershell
+aegisguard defender audit
+```
+
+- Microsoft公式の `Get-MpComputerStatus` と `Get-MpPreference`（および Defenderのポリシーキーの有無の確認）だけを、固定のスクリプトでシステムのPowerShellから呼びます。**設定の変更・除外の追加・プリセットの適用は一切しません。**
+- リアルタイム保護・改ざん防止・クラウド保護・ネットワーク保護・フォルダーアクセスの制御・PUA・ASRルール（Microsoftの公開GUIDで名前を表示、未知のGUIDは `unknown_rule`）の状態を出します。
+- 読めなかった値は `unknown` とし、保護されているとは扱いません。管理者以外では除外の一覧が見えないため件数は `null` になります。**除外パスそのものは出力しません。**
+- ポリシーキーがある場合（`policy_key_present`）は、グループポリシーやMDMの設定が優先され、表示値と実際の適用状態が異なる可能性があります。
+
 ### 限定FIM（P2-04、読み取りのみ）
 
 ```powershell

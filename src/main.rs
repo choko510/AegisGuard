@@ -1,5 +1,6 @@
 mod budget;
 mod c2;
+mod defender;
 // The collector only has a production caller on Windows (the Event Log source).
 #[cfg_attr(not(windows), allow(dead_code))]
 mod events;
@@ -97,6 +98,11 @@ enum Commands {
     Policy {
         #[command(subcommand)]
         command: PolicyCommand,
+    },
+    /// Read-only Microsoft Defender / ASR state audit (never changes settings).
+    Defender {
+        #[command(subcommand)]
+        command: DefenderCommand,
     },
     /// Manage a locally cached list of public C2 indicators.
     C2 {
@@ -268,6 +274,16 @@ enum PolicyCommand {
         out: PathBuf,
         #[arg(long, default_value = "data/policy/audit.jsonl")]
         audit_log: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum DefenderCommand {
+    /// Query Get-MpComputerStatus / Get-MpPreference and report states.
+    Audit {
+        /// Interpret a saved query result instead of querying this machine.
+        #[arg(long)]
+        from_json: Option<PathBuf>,
     },
 }
 
@@ -669,6 +685,19 @@ fn main() -> Result<()> {
                 "{}",
                 serde_json::json!({"status": "approved_not_applied", "plan_id": approved.plan_id, "out": out.display().to_string()})
             );
+        }
+        Commands::Defender {
+            command: DefenderCommand::Audit { from_json },
+        } => {
+            let raw = match from_json {
+                Some(path) => serde_json::from_slice(&std::fs::read(path)?)?,
+                None => defender::query()?,
+            };
+            let audit = defender::interpret(&raw);
+            println!("{}", serde_json::to_string(&audit)?);
+            if !audit.available {
+                return Err("Defender state could not be read; see errors".into());
+            }
         }
         Commands::C2 { command } => match command {
             C2Command::Update {

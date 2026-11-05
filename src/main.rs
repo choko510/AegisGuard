@@ -1,33 +1,17 @@
-mod budget;
-mod c2;
-mod defender;
-// The collector only has a production caller on Windows (the Event Log source).
-#[cfg_attr(not(windows), allow(dead_code))]
-mod events;
-mod fim;
+//! Thin CLI adapter over the `aegisguard` engine library: argument parsing
+//! and printing only. Analyses live in the library so the GUI and the
+//! service get the same typed results.
 #[cfg(windows)]
-mod fimwatch;
-mod fsafe;
-mod ioc;
-mod jsonl;
-mod model;
-mod pe;
-mod policy;
-mod report;
-mod rulepack;
-mod rules;
-mod scan;
-mod script;
-mod store;
+use aegisguard::fimwatch;
+#[cfg(not(feature = "yara"))]
+use aegisguard::rules;
+use aegisguard::Result;
+use aegisguard::{c2, defender, engine, fim, jsonl, policy, report, rulepack, scan};
 #[cfg(feature = "yara")]
-mod yara;
-
+use aegisguard::{store, yara, Error};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-type Error = Box<dyn std::error::Error + Send + Sync>;
-type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Parser)]
 #[command(
@@ -214,21 +198,24 @@ struct IocArgs {
 }
 
 impl IocArgs {
-    fn load(&self) -> Result<ioc::IocSet> {
-        let cache = self.c2_cache.exists().then_some(self.c2_cache.as_path());
-        if cache.is_none() {
-            eprintln!(
-                "warning: no C2 cache at {}; only local IOCs are used",
-                self.c2_cache.display()
-            );
+    fn load(&self) -> Result<aegisguard::ioc::IocSet> {
+        let options = engine::IocOptions {
+            c2_cache: self.c2_cache.clone(),
+            local_iocs: self.local_iocs.clone(),
+            allowlist: self.allowlist.clone(),
+        };
+        let (set, warnings) = options.load(now())?;
+        for warning in warnings {
+            eprintln!("warning: {warning}");
         }
-        ioc::IocSet::load(
-            cache,
-            self.local_iocs.as_deref(),
-            self.allowlist.as_deref(),
-            now(),
-        )
+        Ok(set)
     }
+}
+
+/// Print a value as one JSON line with sorted keys (the CLI's stable format).
+fn print_json(value: &impl serde::Serialize) -> Result<()> {
+    println!("{}", serde_json::to_string(&serde_json::to_value(value)?)?);
+    Ok(())
 }
 
 #[derive(Subcommand)]
@@ -348,7 +335,7 @@ enum C2Command {
 const NO_YARA: &str = "this build has no YARA support; rebuild with `--features yara`";
 
 fn now() -> u64 {
-    model::now_unix_ms() / 1000
+    engine::now()
 }
 
 /// Compile a verified pack's payload with the same gate as a rule directory.
@@ -400,52 +387,17 @@ fn check_rules(dir: &Path) -> Result<()> {
 }
 
 fn print_manifest(status: &str, manifest: &rulepack::Manifest, generation: Option<&str>) {
+    let output = engine::ManifestOutput::new(status, manifest, generation);
     println!(
         "{}",
-        serde_json::json!({
-            "status": status,
-            "issuer": manifest.issuer,
-            "key_id": manifest.key_id,
-            "sequence": manifest.sequence,
-            "issued_at_unix": manifest.issued_at,
-            "expires_at_unix": manifest.expires_at,
-            "payload_sha256": manifest.payload_sha256,
-            "generation": generation,
-        })
+        serde_json::to_value(output).expect("manifest output serializes")
     );
 }
 
 fn run_rules(command: RulesCommand) -> Result<()> {
     match command {
         RulesCommand::Check { dir } => check_rules(&dir),
-        RulesCommand::Keygen { out } => {
-            let mut seed = [0u8; 32];
-            getrandom::getrandom(&mut seed).map_err(|e| format!("no OS randomness: {e}"))?;
-            let key = ed25519_dalek::SigningKey::from_bytes(&seed);
-            let secret = out.with_extension("key");
-            let public = out.with_extension("pub");
-            for path in [&secret, &public] {
-                if path.exists() {
-                    return Err(
-                        format!("{} already exists; not overwriting", path.display()).into(),
-                    );
-                }
-            }
-            // Restrict the secret key file before any key material is written.
-            let mut file = std::fs::File::create_new(&secret)?;
-            store::restrict_to_owner(&secret)?;
-            std::io::Write::write_all(&mut file, hex::encode(seed).as_bytes())?;
-            std::fs::write(&public, hex::encode(key.verifying_key().as_bytes()))?;
-            println!(
-                "{}",
-                serde_json::json!({
-                    "secret_key": secret.display().to_string(),
-                    "public_key": public.display().to_string(),
-                    "key_id": rulepack::key_id(&key.verifying_key()),
-                })
-            );
-            Ok(())
-        }
+        RulesCommand::Keygen { out } => print_json(&engine::keygen(&out)?),
         RulesCommand::Pack {
             dir,
             key,
@@ -523,9 +475,7 @@ fn load_ruleset(
 
 #[cfg(windows)]
 fn collect_events(channel: &str, spool: PathBuf, checkpoint: PathBuf, max: u64) -> Result<()> {
-    let mut source = events::winevt::WinEventSource::new(channel);
-    let paths = events::collector::Paths { spool, checkpoint };
-    let health = events::collector::collect(&mut source, &paths, max);
+    let health = engine::collect_events(channel, spool, checkpoint, max);
     println!("{}", serde_json::to_string(&health)?);
     match health.status {
         "ok" => Ok(()),
@@ -624,57 +574,13 @@ fn main() -> Result<()> {
         } => collect_events(&channel, spool, checkpoint, max_events)?,
         Commands::Events {
             command: EventsCommand::Iocs { spool, iocs },
-        } => {
-            let (events, bad_lines) = events::process::read_spools(&spool)?;
-            let table = events::process::ProcessTable::build(&events);
-            let report = events::network::attribute(&table, &iocs.load()?);
-            println!(
-                "{}",
-                serde_json::json!({"events": events.len(), "bad_lines": bad_lines, "report": report})
-            );
-        }
+        } => print_json(&engine::analyze_spools(&spool)?.attribute(&iocs.load()?))?,
         Commands::Events {
             command: EventsCommand::Correlate { spool, iocs },
-        } => {
-            let (events, bad_lines) = events::process::read_spools(&spool)?;
-            let table = events::process::ProcessTable::build(&events);
-            let iocs = iocs.load()?;
-            let active = |ip: &str| {
-                iocs.ip(ip)
-                    .into_iter()
-                    .filter(ioc::IocEvidence::active)
-                    .map(|e| e.source_id)
-                    .collect()
-            };
-            let result = events::correlate::correlate(&table, &active);
-            println!(
-                "{}",
-                serde_json::json!({
-                    "events": events.len(),
-                    "bad_lines": bad_lines,
-                    "duplicates": table.duplicates,
-                    "anomalies": table.anomalies.len(),
-                    "unobserved": table.unobserved(),
-                    "correlation": result,
-                })
-            );
-        }
+        } => print_json(&engine::analyze_spools(&spool)?.correlate(&iocs.load()?))?,
         Commands::Events {
             command: EventsCommand::Processes { spool },
-        } => {
-            let (events, bad_lines) = events::process::read_spools(&spool)?;
-            let table = events::process::ProcessTable::build(&events);
-            println!(
-                "{}",
-                serde_json::json!({
-                    "events": events.len(),
-                    "bad_lines": bad_lines,
-                    "unobserved": table.unobserved(),
-                    "note": "Unobserved event types mean unknown activity, not absence of activity.",
-                    "table": table,
-                })
-            );
-        }
+        } => print_json(&engine::analyze_spools(&spool)?.processes())?,
         Commands::Fim { command } => run_fim(command)?,
         Commands::Policy {
             command:
@@ -685,23 +591,9 @@ fn main() -> Result<()> {
                     out,
                 },
         } => {
-            let (events, _) = events::process::read_spools(&spool)?;
-            let table = events::process::ProcessTable::build(&events);
-            let report = events::network::attribute(&table, &iocs.load()?);
-            let plan = policy::plan(&report.findings, now(), expiry_hours.saturating_mul(3600))?;
-            policy::save(&plan, &out)?;
-            println!(
-                "{}",
-                serde_json::json!({
-                    "plan_id": plan.plan_id,
-                    "dry_run": plan.dry_run,
-                    "candidates": plan.candidates.len(),
-                    "rejected": plan.rejected.len(),
-                    "visibility": report.visibility,
-                    "out": out.display().to_string(),
-                    "note": "Nothing was applied. Applying plans is not implemented in this build.",
-                })
-            );
+            let analysis = engine::analyze_spools(&spool)?;
+            let output = engine::plan_blocks(&analysis, &iocs.load()?, expiry_hours, &out, now())?;
+            print_json(&output)?;
         }
         Commands::Policy {
             command:

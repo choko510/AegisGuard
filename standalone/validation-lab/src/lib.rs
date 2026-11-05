@@ -526,6 +526,14 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
                         }
                     }
                 }
+                Ok(bytes) if a.path == "stale-ioc/expired-ioc.json" => {
+                    match serde_json::from_slice::<Value>(&bytes) {
+                        Ok(v) if v["expires_at_unix_ms"].as_u64().is_some_and(|t| t < BASE_MS)
+                            && v["indicator"] == "192.0.2.42"
+                            && v["compatible_with_aegisguard_c2_cache"] == false => {}
+                        _ => errors.push("invalid or non-expired synthetic IOC".into()),
+                    }
+                }
                 Ok(_) => {}
                 Err(e) => errors.push(e),
             }
@@ -554,6 +562,9 @@ pub fn summarize(expected: &Path, actual: &Path) -> LabResult<Value> {
         lines += 1;
         if lines > MAX_CASES || line.len() > MAX_LINE { return Err("report count/line size exceeded".into()); }
         let v: Value = serde_json::from_slice(line).map_err(|_| "invalid report JSONL")?;
+        if v.get("schema_version").is_some() && v["schema_version"] != VERSION {
+            return Err("unknown actual report schema".into());
+        }
         let case_id = v["case_id"].as_str().or_else(|| {
             if manifest.cases.len() == 1 { Some(manifest.cases[0].case_id.as_str()) } else { None }
         }).ok_or("report lacks case_id for multi-case corpus")?;
@@ -575,9 +586,16 @@ pub fn summarize(expected: &Path, actual: &Path) -> LabResult<Value> {
                 "planned" => { planned += 1; "planned" }
                 "unknown" => { unknown += 1; "unknown" }
                 _ => {
-                    let evaluable = report.and_then(|v| v["rules"].as_array()).and_then(|rs| {
-                        rs.iter().find(|r| r["rule_id"].as_str() == Some(rule.rule_id.as_str()))
-                    }).and_then(|r| r["evaluable"].as_bool());
+                    let report_complete = report.is_some_and(|v| {
+                        v["rules"].is_array() && v["findings"].is_array()
+                            && v.get("analysis_complete") != Some(&Value::Bool(false))
+                            && (v.get("status").is_none() || v["status"] == "complete" || v["status"] == "ok")
+                    });
+                    let evaluable = if report_complete {
+                        report.and_then(|v| v["rules"].as_array()).and_then(|rs| {
+                            rs.iter().find(|r| r["rule_id"].as_str() == Some(rule.rule_id.as_str()))
+                        }).and_then(|r| r["evaluable"].as_bool())
+                    } else { None };
                     if evaluable != Some(true) { unknown += 1; "unknown" }
                     else {
                         let found = report.and_then(|v| v["findings"].as_array()).is_some_and(|fs| {
@@ -600,7 +618,7 @@ pub fn summarize(expected: &Path, actual: &Path) -> LabResult<Value> {
             }));
         }
     }
-    let status = if failed > 0 || unknown > 0 || !warnings.is_empty() { "partial" } else { "complete" };
+    let status = if failed > 0 || unknown > 0 || planned > 0 || !warnings.is_empty() { "partial" } else { "complete" };
     Ok(output(status, json!({
         "cases":manifest.cases.len(), "reports":reports.len(),
         "passed":passed, "failed":failed, "unknown":unknown, "planned":planned
@@ -617,7 +635,10 @@ fn output(status: &str, coverage: Value, warnings: Vec<String>, entries: Value) 
 }
 
 pub fn error_output(error: &str) -> Value {
-    output("error", json!({"cases":0,"events":0}), vec![error.into()], json!({}))
+    let status = if error.contains("PermissionDenied") { "permission_denied" }
+        else if error.contains("NotFound") || error.contains("not accessible") { "unavailable" }
+        else { "error" };
+    output(status, json!({"cases":0,"events":0}), vec![error.into()], json!({}))
 }
 
 #[cfg(test)]

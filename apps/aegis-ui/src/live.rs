@@ -12,6 +12,8 @@ use std::time::Duration;
 
 pub const POLL: Duration = Duration::from_secs(5);
 
+// The pipe client only exists on Windows; elsewhere some states are unused.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Connection {
     /// Not attempted yet.

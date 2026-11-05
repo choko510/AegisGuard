@@ -85,11 +85,7 @@ mod tests {
     #[test]
     fn harmless_slow_process_is_stopped() {
         let started = Instant::now();
-        let result = run_program(
-            Path::new("/bin/sleep"),
-            &["2"],
-            Duration::from_millis(50),
-        );
+        let result = run_program(Path::new("/bin/sleep"), &["2"], Duration::from_millis(50));
         assert_eq!(result, Err(RunFailure::Timeout));
         assert!(started.elapsed() < Duration::from_secs(2));
     }
@@ -97,12 +93,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn clean_small_output_is_accepted() {
-        let output = run_program(
-            Path::new("/bin/echo"),
-            &["safe"],
-            Duration::from_secs(2),
-        )
-        .unwrap();
+        let output =
+            run_program(Path::new("/bin/echo"), &["safe"], Duration::from_secs(2)).unwrap();
         assert_eq!(output, b"safe\n");
     }
 }

@@ -35,6 +35,9 @@ pub struct Report {
     pub decoded_layers: usize,
     pub signals: Vec<Signal>,
     pub warning: Option<String>,
+    /// False when deobfuscation was bounded or truncated. Never imply a clean scan.
+    pub analysis_complete: bool,
+    pub incomplete_reasons: Vec<&'static str>,
 }
 
 impl Report {
@@ -49,6 +52,8 @@ impl Report {
             decoded_layers: 0,
             signals: Vec::new(),
             warning: None,
+            analysis_complete: true,
+            incomplete_reasons: Vec::new(),
         }
     }
 
@@ -70,8 +75,20 @@ impl Report {
         }
     }
 
+    /// An incomplete static analysis is not a clean result even if no indicators matched.
+    pub fn mark_incomplete(&mut self, reason: &'static str) {
+        self.analysis_complete = false;
+        if self.status == "analyzed" || self.status == "incomplete" {
+            self.status = "incomplete";
+        }
+        if !self.incomplete_reasons.contains(&reason) {
+            self.incomplete_reasons.push(reason);
+        }
+        self.warning = Some("Deobfuscation was incomplete; undetected behavior is possible".into());
+    }
+
     pub fn finish(&mut self) {
-        if self.status != "analyzed" {
+        if self.status != "analyzed" && self.status != "incomplete" {
             self.risk = "not_assessed";
             return;
         }
@@ -82,6 +99,7 @@ impl Report {
             .sum::<u32>()
             .min(100);
         self.risk = match self.score {
+            0..=24 if !self.analysis_complete => "incomplete",
             0..=24 => "low_signal",
             25..=64 => "review",
             _ => "high",
@@ -90,7 +108,36 @@ impl Report {
 
     pub fn unavailable(&mut self, status: &'static str, explanation: impl Into<String>) {
         self.status = status;
+        self.analysis_complete = false;
         self.warning = Some(explanation.into());
         self.finish();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_without_signals_is_never_low_signal() {
+        let mut report = Report::new("test.cmd".into(), "script");
+        report.mark_incomplete("limit_reached");
+        report.finish();
+        assert_eq!(report.status, "incomplete");
+        assert_eq!(report.risk, "incomplete");
+        assert_eq!(report.score, 0);
+        assert!(!report.analysis_complete);
+        assert_eq!(report.incomplete_reasons, vec!["limit_reached"]);
+    }
+
+    #[test]
+    fn incomplete_preserves_high_risk_indicators() {
+        let mut report = Report::new("test.ps1".into(), "script");
+        report.add("suspicious", 85, "raw", "Synthetic test signal");
+        report.mark_incomplete("limit_reached");
+        report.mark_incomplete("limit_reached");
+        report.finish();
+        assert_eq!(report.risk, "high");
+        assert_eq!(report.incomplete_reasons.len(), 1);
     }
 }

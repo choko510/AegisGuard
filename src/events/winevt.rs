@@ -76,6 +76,9 @@ pub struct WinEventSource {
     channel: String,
     query: Option<Handle>,
     bookmark: Option<Handle>,
+    /// After resuming, the query is positioned *on* the bookmarked record,
+    /// which was already persisted and must be skipped.
+    skip_bookmarked: bool,
 }
 
 impl WinEventSource {
@@ -84,6 +87,7 @@ impl WinEventSource {
             channel: channel.to_owned(),
             query: None,
             bookmark: None,
+            skip_bookmarked: false,
         }
     }
 
@@ -137,12 +141,15 @@ impl EventSource for WinEventSource {
             return Ok(Resume::CursorLost);
         }
         let bookmark = Handle(bookmark);
-        // SAFETY: both handles are valid; strict seek fails if the bookmarked
-        // record no longer exists instead of silently moving elsewhere.
+        // Seek strictly to the bookmarked record itself (offset 0): this fails
+        // only if that record no longer exists (overwritten), and works when
+        // nothing newer exists yet. Seeking to offset 1 would fail at the end
+        // of the log and was misread as a lost cursor, re-reading everything.
+        // SAFETY: both handles are valid.
         let sought = unsafe {
             EvtSeek(
                 query.0,
-                1,
+                0,
                 bookmark.0,
                 0,
                 EvtSeekRelativeToBookmark | EvtSeekStrict,
@@ -151,6 +158,7 @@ impl EventSource for WinEventSource {
         self.bookmark = Some(bookmark);
         if sought != 0 {
             self.query = Some(query);
+            self.skip_bookmarked = true;
             Ok(Resume::AfterCursor)
         } else {
             // Restart from the oldest retained event; the collector reports the gap.
@@ -184,10 +192,18 @@ impl EventSource for WinEventSource {
             }
             return Err(format!("EvtNext failed (Windows error {code})").into());
         }
-        let owned: Vec<Handle> = handles[..returned as usize]
+        let mut owned: Vec<Handle> = handles[..returned as usize]
             .iter()
             .map(|h| Handle(*h))
             .collect();
+        if self.skip_bookmarked && !owned.is_empty() {
+            // The first event after resuming is the bookmarked one.
+            self.skip_bookmarked = false;
+            owned.remove(0);
+            if owned.is_empty() {
+                return self.next_batch(max);
+            }
+        }
         let mut events = Vec::with_capacity(owned.len());
         for event in &owned {
             let xml = render(event.0, EvtRenderEventXml)?
@@ -226,6 +242,26 @@ mod tests {
             let mut source = WinEventSource::new("Application");
             let second = collect(&mut source, &paths, 5);
             assert_eq!(second.resumed_from, Some("cursor"), "{second:?}");
+            assert!(!second.gap_detected, "{second:?}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Regression: resuming at the very end of a channel must neither lose
+    /// the cursor nor re-read old events.
+    #[test]
+    fn resuming_at_the_end_of_the_log_reads_nothing_old() {
+        let (dir, paths) = temp_paths("winevt-end");
+        let mut source = WinEventSource::new("Application");
+        let first = collect(&mut source, &paths, 1_000_000);
+        assert_eq!(first.status, "ok", "{first:?}");
+        for _ in 0..2 {
+            let mut source = WinEventSource::new("Application");
+            let again = collect(&mut source, &paths, 1_000_000);
+            assert_eq!(again.resumed_from, Some("cursor"), "{again:?}");
+            assert!(!again.gap_detected, "{again:?}");
+            // Only events written since the previous read (normally none).
+            assert!(again.persisted < 50, "re-read old events: {again:?}");
         }
         std::fs::remove_dir_all(dir).unwrap();
     }

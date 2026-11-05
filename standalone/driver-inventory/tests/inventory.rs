@@ -113,3 +113,25 @@ fn unicode_and_untrusted_path_rules() {
     assert_eq!(normalize_image_path(r"C:\Windows\..\oops.sys", r"C:\Windows").1,
         "relative_component");
 }
+
+
+#[test]
+fn delayed_start_query_failure_is_visible_and_drivers_are_not_applicable() {
+    let raw = json!({
+        "schema_version":1,
+        "enumeration_status":"complete",
+        "services":[
+            {"name":"AutoSvc","service_type":16,"state":4,"start_type":2,
+             "image_path":"C:\\Windows\\System32\\svc.exe",
+             "config_error":"permission_denied"},
+            {"name":"BootDriver","service_type":1,"state":4,"start_type":0,
+             "image_path":"C:\\Windows\\System32\\drivers\\boot.sys"}
+        ]
+    });
+    let result = report(fixture(&serde_json::to_vec(&raw).unwrap()).unwrap(), false, false, r"C:\Windows");
+    assert_eq!(result["status"], "partial");
+    assert_eq!(result["entries"][0]["delayed_auto_start_status"], "permission_denied");
+    assert_eq!(result["entries"][0]["delayed_auto_start"], serde_json::Value::Null);
+    assert_eq!(result["entries"][1]["delayed_auto_start_status"], "not_applicable");
+    assert_ne!(result["entries"][0]["delayed_auto_start"], false);
+}

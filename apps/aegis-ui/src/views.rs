@@ -1,6 +1,7 @@
 //! Pure view models: loaded data -> status rows. Kept free of egui so the
 //! "never claim more than the data shows" rules can be unit tested.
 use crate::data::{now_unix, Dataset, STALE_AFTER_SECS};
+use crate::live::{Connection, Live};
 use crate::status::Status;
 use aegisguard::api::{Assessment, DocumentKind, SignalLevel};
 use serde_json::Value;
@@ -181,7 +182,109 @@ fn review_findings(data: &Dataset) -> usize {
         .count()
 }
 
-pub fn home_rows(data: &Dataset, now: u64) -> Vec<StatusRow> {
+/// The service's own state, as seen over IPC (P9-01).
+pub fn service_row(live: &Live) -> StatusRow {
+    let name = "AegisGuard 常駐監視";
+    match &live.connection {
+        Connection::Unknown => row(name, Status::NoData, "サービスへの接続を確認中です。"),
+        Connection::NotRunning(_) => row(
+            name,
+            Status::Stopped,
+            "サービスに接続できません（停止中または未登録）。現在は常駐監視していません。`aegisguard service install` は管理者が実行します。",
+        ),
+        Connection::Error(e) => row(
+            name,
+            Status::Incomplete,
+            format!("サービスの状態を確認できません：{e}"),
+        ),
+        Connection::Service | Connection::Console => {
+            let console = live.connection == Connection::Console;
+            let state = live.state();
+            let ticks = state.and_then(|s| s["ticks"].as_u64()).unwrap_or(0);
+            let problems: Vec<&str> = state
+                .and_then(|s| s["problems"].as_array())
+                .map(|p| p.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let status = if live.stale() {
+                Status::Stale
+            } else if !problems.is_empty() {
+                Status::Incomplete
+            } else {
+                Status::Running
+            };
+            let mode = if console {
+                "コンソール実行（サービスではありません。このウィンドウやコマンドを閉じると止まります）"
+            } else {
+                "Windowsサービス（このGUIを閉じても監視は続きます）"
+            };
+            let stale = if live.stale() {
+                "最終更新が古く、停止している可能性があります。"
+            } else {
+                ""
+            };
+            row(
+                name,
+                status,
+                format!(
+                    "{mode}。処理回数 {ticks}。{stale}{}",
+                    if problems.is_empty() {
+                        String::new()
+                    } else {
+                        format!("問題：{}", problems.join(" / "))
+                    }
+                ),
+            )
+        }
+    }
+}
+
+/// Per-channel collection rows from the live service state.
+pub fn channel_rows(live: &Live) -> Vec<StatusRow> {
+    let Some(channels) = live.state().and_then(|s| s["channels"].as_array()) else {
+        return Vec::new();
+    };
+    channels
+        .iter()
+        .map(|c| {
+            let st = c["status"].as_str().unwrap_or("unknown");
+            let status = match st {
+                _ if live.stale() => Status::Stale,
+                "ok" => Status::Observed,
+                "not_collected" => Status::NoData,
+                _ => Status::Incomplete,
+            };
+            let reason = match st {
+                "ok" => "収集できています".to_string(),
+                "gap" => "ログの一部が失われました（gap）".into(),
+                "access_denied" => {
+                    "読み取り権限がありません（Event Log Readers または LocalSystem が必要）".into()
+                }
+                "channel_not_found" => "チャネルがありません（例：Sysmon 未導入）".into(),
+                "paused_low_disk" => {
+                    "空き容量不足のため一時停止中（取りこぼしはログ側に残ります）".into()
+                }
+                "paused_spool_full" => "スプールが満杯のため一時停止中".into(),
+                "not_collected" => "まだ収集していません".into(),
+                other => format!("状態：{other}"),
+            };
+            row(
+                c["channel"].as_str().unwrap_or("?").to_string(),
+                status,
+                format!(
+                    "{reason}。累計 {} 件、直近 {} 件。{}",
+                    c["persisted_total"].as_u64().unwrap_or(0),
+                    c["last_tick_persisted"].as_u64().unwrap_or(0),
+                    c["access_error"]
+                        .as_str()
+                        .map(|e| format!("詳細：{e}"))
+                        .unwrap_or_default()
+                ),
+            )
+        })
+        .collect()
+}
+
+pub fn home_rows(data: &Dataset, live: &Live, now: u64) -> Vec<StatusRow> {
     let counts = scan_counts(data);
     let findings = review_findings(data);
     let partial_files = data.scan_files.iter().filter(|f| !f.complete()).count();
@@ -205,11 +308,7 @@ pub fn home_rows(data: &Dataset, now: u64) -> Vec<StatusRow> {
     };
     vec![
         defender_row(data, now),
-        row(
-            "AegisGuard 常駐監視",
-            Status::NotAvailable,
-            "常駐サービスは未実装です（P8）。現在は監視していません。",
-        ),
+        service_row(live),
         sensor_row(data, now),
         row("最終更新", updated, updated_text),
         row(
@@ -457,10 +556,39 @@ mod tests {
 
     #[test]
     fn empty_dataset_claims_nothing() {
-        let rows = home_rows(&Dataset::default(), NOW);
+        let rows = home_rows(&Dataset::default(), &Live::default(), NOW);
         assert!(rows
             .iter()
             .all(|r| matches!(r.status, Status::NoData | Status::NotAvailable)));
+    }
+
+    #[test]
+    fn service_row_never_claims_monitoring_without_a_fresh_service() {
+        let mut live = Live::default();
+        assert_eq!(service_row(&live).status, Status::NoData);
+        live.connection = Connection::NotRunning("x".into());
+        assert_eq!(service_row(&live).status, Status::Stopped);
+        live.connection = Connection::Service;
+        live.status =
+            Some(serde_json::json!({"stale": true, "state": {"ticks": 3, "problems": []}}));
+        assert_eq!(service_row(&live).status, Status::Stale);
+        live.status = Some(
+            serde_json::json!({"stale": false, "state": {"ticks": 3, "problems": ["ipc: x"]}}),
+        );
+        assert_eq!(service_row(&live).status, Status::Incomplete);
+        live.status = Some(
+            serde_json::json!({"stale": false, "state": {"ticks": 3, "problems": [], "channels": [
+            {"channel": "Sysmon", "status": "channel_not_found"},
+            {"channel": "Defender", "status": "ok", "persisted_total": 5}]}}),
+        );
+        assert_eq!(service_row(&live).status, Status::Running);
+        assert!(service_row(&live).detail.contains("GUIを閉じても"));
+        live.connection = Connection::Console;
+        assert!(service_row(&live).detail.contains("サービスではありません"));
+        let ch = channel_rows(&live);
+        assert_eq!(ch[0].status, Status::Incomplete);
+        assert!(ch[0].detail.contains("Sysmon 未導入"));
+        assert_eq!(ch[1].status, Status::Observed);
     }
 
     #[test]
@@ -504,10 +632,13 @@ mod tests {
             truncated: None,
             saved_at_unix: Some(NOW),
         });
-        let rows = home_rows(&d, NOW);
+        let rows = home_rows(&d, &Live::default(), NOW);
         assert_eq!(rows[4].status, Status::Incomplete);
         d.scans.push(rec("review", "analyzed", "review"));
-        assert_eq!(home_rows(&d, NOW)[4].status, Status::Review);
+        assert_eq!(
+            home_rows(&d, &Live::default(), NOW)[4].status,
+            Status::Review
+        );
         let c = scan_counts(&d);
         assert_eq!(
             (c.total, c.review, c.incomplete, c.nothing_found),

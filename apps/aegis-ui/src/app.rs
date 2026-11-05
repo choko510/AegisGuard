@@ -8,6 +8,7 @@
 //! not exist yet are shown as "まだ利用できません", missing data as "データなし".
 use crate::data::{self, Dataset, Job, Update};
 use crate::fluent::{self, icon_text};
+use crate::live::{self, Live};
 use crate::status::{icon, Status};
 use crate::theme::{self, Accent, Palette};
 use crate::views::{self, StatusRow};
@@ -129,6 +130,10 @@ pub struct AegisApp {
     last_load_note: Option<String>,
     /// Scan list filter: hide rows where nothing was found.
     attention_only: bool,
+    /// Latest result from the service pipe (P9-01).
+    pub live: Live,
+    live_rx: Option<std::sync::mpsc::Receiver<Live>>,
+    live_enabled: bool,
 }
 
 impl AegisApp {
@@ -143,6 +148,32 @@ impl AegisApp {
             path_input: String::new(),
             last_load_note: None,
             attention_only: false,
+            live: Live::default(),
+            live_rx: None,
+            live_enabled: false,
+        }
+    }
+
+    /// Poll the service in the background while the window is open.
+    pub fn with_live(mut self) -> Self {
+        self.live_enabled = true;
+        self
+    }
+
+    fn poll_live(&mut self, ctx: &egui::Context) {
+        if self.live_enabled && self.live_rx.is_none() {
+            let repaint = ctx.clone();
+            self.live_rx = Some(live::start(move || repaint.request_repaint()));
+        }
+        let mut latest = None;
+        if let Some(rx) = &self.live_rx {
+            while let Ok(l) = rx.try_recv() {
+                latest = Some(l);
+            }
+        }
+        if let Some(l) = latest {
+            live::merge_into(&mut self.data, &l);
+            self.live = l;
         }
     }
 
@@ -224,6 +255,7 @@ impl AegisApp {
             self.applied = Some(self.theme);
         }
         self.poll_job();
+        self.poll_live(&ctx);
         self.shortcuts(&ctx);
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -387,14 +419,48 @@ impl AegisApp {
                 self.timelines(ui, p);
             }
             Page::Realtime => {
+                fluent::section(ui, "サービス");
+                let service = views::service_row(&self.live);
                 fluent::settings_card(
                     ui,
                     p,
                     icon::REALTIME,
-                    "リアルタイム監視",
-                    "常駐サービスとリアルタイム相関は未実装です。現在はCLIでの単発収集とオフライン相関のみで、監視は行っていません（P8で常駐化予定）。",
-                    Some(Status::NotAvailable),
+                    &service.name,
+                    &service.detail,
+                    Some(service.status),
                 );
+                let channels = views::channel_rows(&self.live);
+                if !channels.is_empty() {
+                    fluent::section(ui, "イベントの収集");
+                    rows(ui, p, &channels, &[]);
+                }
+                if let Some(f) = &self.live.findings {
+                    fluent::section(ui, "相関");
+                    let w = &f["window"];
+                    fluent::settings_card(
+                        ui,
+                        p,
+                        icon::HISTORY,
+                        &format!("所見 {} 件（新規 {} 件）", f["total"].as_u64().unwrap_or(0), f["new_findings"].as_u64().unwrap_or(0)),
+                        &format!(
+                            "直近のイベント {} 件を評価（上限で落とした件数 {}）。観測されていない種別：{}。IOC：{}",
+                            w["events"].as_u64().unwrap_or(0),
+                            w["dropped_by_count_cap"].as_u64().unwrap_or(0),
+                            w["unobserved"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default(),
+                            w["ioc_source"].as_str().unwrap_or("?")
+                        ),
+                        None,
+                    );
+                } else if let Some(e) = &self.live.findings_error {
+                    fluent::settings_card(
+                        ui,
+                        p,
+                        icon::HISTORY,
+                        "相関結果",
+                        e,
+                        Some(Status::NoData),
+                    );
+                }
             }
             Page::Network => {
                 fluent::info_bar(
@@ -422,7 +488,7 @@ impl AegisApp {
             "何も削除・遮断せず、OSやMicrosoft Defenderの設定を変更しません。結果が無いことは安全の証明ではありません。",
         );
         fluent::section(ui, "概要");
-        let tiles = views::home_rows(&self.data, now);
+        let tiles = views::home_rows(&self.data, &self.live, now);
         let icons = [
             icon::SHIELD,
             icon::REALTIME,

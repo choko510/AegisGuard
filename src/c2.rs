@@ -350,7 +350,7 @@ pub fn update(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn effective_matches<'a>(cache: &'a Cache, ip: IpAddr, now: u64) -> (Vec<&'a str>, Vec<&'a str>) {
+fn effective_matches(cache: &Cache, ip: IpAddr, now: u64) -> (Vec<&str>, Vec<&str>) {
     let mut fresh = Vec::new();
     let mut stale = Vec::new();
     for entry in cache.entries.iter().filter(|e| e.ip == ip) {

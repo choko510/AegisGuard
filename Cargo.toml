@@ -32,6 +32,11 @@ yara-x = { version = "1.22.1", optional = true, default-features = false, featur
 members = [".", "apps/aegis-ui"]
 default-members = ["."]
 
+# The GUI test binary otherwise exceeds the MSVC PDB size limit (LNK1140);
+# dependencies keep line tables, AegisGuard's own crates keep full debug info.
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

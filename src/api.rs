@@ -453,6 +453,10 @@ pub enum DocumentKind {
     DefenderAudit,
     C2Status,
     FimCheck,
+    /// `rules status/install/rollback` output.
+    RulePack,
+    /// `browser k2f` output.
+    BrowserCheck,
     Unknown,
 }
 
@@ -479,6 +483,10 @@ pub fn classify(value: &Value) -> DocumentKind {
         DocumentKind::C2Status
     } else if has("changes") && has("not_monitored") {
         DocumentKind::FimCheck
+    } else if has("payload_sha256") && has("sequence") {
+        DocumentKind::RulePack
+    } else if has("check_id") && has("verdict") {
+        DocumentKind::BrowserCheck
     } else {
         DocumentKind::Unknown
     }

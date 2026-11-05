@@ -242,7 +242,7 @@ fn device_guard(
 fn bitlocker(probe: Option<&Map<String, Value>>, checked_at: u64) -> Result<PostureControl, &'static str> {
     let mut result = PostureControl::new(
         "bitlocker_os_volume",
-        "Win32_EncryptableVolume.ProtectionStatus;ConversionStatus",
+        "Win32_EncryptableVolume.GetProtectionStatus;GetConversionStatus",
         checked_at,
     );
     if early(&mut result, probe) {

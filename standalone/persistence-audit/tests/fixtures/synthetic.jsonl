@@ -1,0 +1,16 @@
+{"t":"entry","section":"registry_hkcu_64_run","kind":"run","scope":"user","target_path":"C:\\Users\\<redacted>\\AppData\\Local\\Tools\\agent.exe","entry_id":"h1:0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"}
+{"t":"entry","section":"registry_hklm_64_run","kind":"run","scope":"machine","target_path":"C:\\Program Files\\Acme\\updater.exe","entry_id":"h1:0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"}
+{"t":"entry","section":"startup_user","kind":"startup","scope":"user","target_path":"C:\\Users\\<redacted>\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\helper.exe","entry_id":"h1:0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"}
+{"t":"entry","section":"task_scheduler","kind":"scheduled_task","scope":"machine","target_path":"%SystemRoot%\\System32\\cmd.exe","entry_id":"h1:0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d"}
+{"t":"entry","section":"registry_hkcu_64_runonce","kind":"run_once","scope":"user","target_path":null,"entry_id":"h1:0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e"}
+{"t":"done","section":"registry_hkcu_64_run"}
+{"t":"done","section":"registry_hkcu_64_runonce"}
+{"t":"done","section":"registry_hkcu_32_run"}
+{"t":"done","section":"registry_hkcu_32_runonce"}
+{"t":"done","section":"registry_hklm_64_run"}
+{"t":"done","section":"registry_hklm_64_runonce"}
+{"t":"done","section":"registry_hklm_32_run"}
+{"t":"done","section":"registry_hklm_32_runonce"}
+{"t":"done","section":"startup_user"}
+{"t":"done","section":"startup_common"}
+{"t":"done","section":"task_scheduler"}

@@ -7,8 +7,12 @@ publish = false
 description = "Read-only standalone privacy QA for explicitly supplied logs and JSONL"
 
 [dependencies]
+serde = "=1.0.229"
 regex = "=1.13.1"
 serde_json = "=1.0.154"
 
 [profile.release]
 panic = "abort"
+
+# Independent crate: avoid joining the parent AegisGuard workspace.
+[workspace]

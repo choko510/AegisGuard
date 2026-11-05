@@ -29,6 +29,7 @@ const CASES: &[&str] = &[
 ];
 
 type LabResult<T> = Result<T, String>;
+type ScenarioResult = (Vec<Event>, Vec<Expectation>, Vec<String>, String);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -210,7 +211,7 @@ fn expectation(rule: &str, outcome: &str, events: &[Event], refs: &[usize]) -> E
 }
 
 /// All paths and hosts are invented. No fixture is an executable or DLL.
-fn scenario(seed: u64, name: &str, ordinal: usize) -> LabResult<(Vec<Event>, Vec<Expectation>, Vec<String>, String)> {
+fn scenario(seed: u64, name: &str, ordinal: usize) -> LabResult<ScenarioResult> {
     let a = guid(seed, name, "writer");
     let b = guid(seed, name, "browser");
     let c = guid(seed, name, "secondary");
@@ -643,6 +644,7 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
                                     num += 1;
                                     event_lines += 1;
                                     if let Some(uid) = v["event_uid"].as_str() { event_uids.insert(uid.to_owned()); }
+                                    json_events.push(v);
                                 }
                             _ => errors.push("malformed or incompatible event JSONL".into()),
                         }

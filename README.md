@@ -145,6 +145,8 @@ aegisguard events collect --channel Microsoft-Windows-Sysmon/Operational --spool
 - 保存するのは許可リストのフィールドだけです（ProcessGuid・Image・宛先IP/ポート・DNS名・ハッシュ等）。`CommandLine` はSHA-256だけを保存し、ユーザー名や端末名は保存しません。
 - `aegisguard events processes --spool dataventssysmon.jsonl` はスプールからProcessGuid単位のプロセスの生存期間（作成・終了・通信先・DNS・DLLロード数・アクセス先）を組み立てます。PIDだけでは同一視しません。作成イベントを見ていないプロセスは `start_observed=false`、重複・時刻の逆転・同じPIDの同時生存は `anomalies` に出します。**観測されなかったイベント種別（例：Sysmon ID 3/7/22が無効）は `unobserved` に出し、「通信なし」とは扱いません。**
 - `aegisguard events correlate --spool ... --c2-cache datar-cache.json` は組み込みの相関ルール（AG-C001：Officeアプリがスクリプトホスト等を起動、AG-C002：起動後5分以内に新鮮なC2 IOCへ接続、AG-C003：1分以内に子プロセス10個以上）をオフラインで実行します。結果は確認のための根拠（`review` / `observed`）で、悪性の判定ではありません。必要なイベント種別が観測されていないルールは `evaluable=false` と `missing_sources` で示します。遮断・削除はしません。
+- `aegisguard events iocs --spool ... --c2-cache data\c2-cache.json [--local-iocs my-iocs.json] [--allowlist allow.json]` は、IOCの根拠をプロセスに結び付けます（P3-01）。`basis` は `direct_ip`（接続先IPが一致）・`dns_query`（IOCドメインを問い合わせた）・`dns_then_connect`（問い合わせの回答に含まれたIPへ5分以内に接続）で、ドメイン名だけでは接続先の証明にしません。期限切れのIOCは `stale_only`、利用者の例外は `suppressed`（理由付き）、3種類以上のプログラムが接続した宛先は共有基盤の可能性として確度を下げます。DoH/DoT・VPN・NRPT経由やSysmonで無効なイベント種別は `visibility` に「見えない」と明記します。
+- ローカルIOCと例外は利用者が管理するJSON配列です（`{"type":"ip|domain","value":"...","expires_at_unix":...}`、例外は `reason` が必須）。期限のない項目は受け付けません。`c2 check` は各一致の出所・ライセンス・期限を `evidence` に出します。
 
 ### 限定FIM（P2-04、読み取りのみ）
 
@@ -167,7 +169,7 @@ Windowsサービス、ProcessGuid相関、AMSI連携、Authenticode、DNS/ドメ
 ## 脅威フィード
 
 - [Feodo Tracker](https://feodotracker.abuse.ch/blocklist/)：推奨IPブロックリスト。将来の遮断機能を検討するための候補ですが、現時点では照合のみです。
-- [C2IntelFeeds](https://github.com/drb-ra/C2IntelFeeds)：検証済みのIPフィード。誤検知とIP再割当があり得るため、遮断対象には自動登録しません。**利用時はフィードのライセンスを必ず確認**してください。
+- [C2IntelFeeds](https://github.com/drb-ra/C2IntelFeeds)：検証済みのIPフィード。**CC BY-NC-SA 4.0（非商用）のため既定では取得しません。** 利用条件を確認したうえで `c2 update --include-source c2intel_verified` と明示した場合だけ取得します。誤検知とIP再割当があり得るため、確度は `low` として扱います。
 
 フィードのデータそのものはリポジトリに同梱・再配布しません。
 

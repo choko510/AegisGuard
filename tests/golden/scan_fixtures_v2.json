@@ -39,7 +39,7 @@
     "signals": [],
     "started_at_unix_ms": "<volatile>",
     "status": "incomplete",
-    "warning": "Deobfuscation was incomplete; undetected behavior is possible"
+    "warning": "Analysis was incomplete; undetected behavior is possible"
   },
   {
     "analysis_complete": true,

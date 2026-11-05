@@ -71,7 +71,7 @@ cargo run --release -- c2 status
 | `schema_version` | `2`。互換性のない変更をする場合だけ増やします |
 | `assessment` | **完全性の軸**：`analyzed` / `incomplete` / `not_assessed`。`analysis_complete` は `assessment == "analyzed"` と常に一致します |
 | `signal_level` | **検出の軸**：`low_signal` / `review` / `high` / `not_evaluated`（未検査かつ検出なし）。完全性とは独立に、見つかった根拠の強さだけを表します |
-| `not_assessed_reason` | 未検査の理由コード（例：`unsupported_file_type`、`metadata_failed`、`symlink_not_followed`、`not_regular_file`、`size_limit_exceeded`、`open_failed`、`read_failed`、`file_grew_during_read`、`malformed_pe`、`text_decode_failed`、`walk_failed`、`identity_unavailable`、`path_identity_mismatch`、`file_changed_during_scan`）。`status` は従来値のまま残ります |
+| `not_assessed_reason` | 未検査の理由コード（例：`unsupported_file_type`、`metadata_failed`、`symlink_not_followed`、`not_regular_file`、`size_limit_exceeded`、`open_failed`、`read_failed`、`file_grew_during_read`、`malformed_pe`、`text_decode_failed`、`walk_failed`、`identity_unavailable`、`path_identity_mismatch`、`file_changed_during_scan`、走査停止時の `scan_file_limit`・`scan_byte_limit`・`scan_time_limit`・`scan_cancelled`）。`status` は従来値のまま残ります |
 | `coverage` | 実際に読んだバイト数、適用したサイズ上限、実行した解析器。到達できなかった範囲は `incomplete_reasons` / `not_assessed_reason` に出ます |
 | `file_identity` | サイズ・更新時刻・取得元（`path_metadata` / `handle_metadata`）と、開いたハンドルの `device_id`・`file_id`・`link_count`（Windowsはボリュームシリアル＋ファイルインデックス、Unixはdev＋inode）。読み取り後にパスが同じファイルを指すか再確認します |
 | `engine` | エンジン名・バージョンと組み込みルールセットID（ルール変更時に更新） |
@@ -81,6 +81,20 @@ cargo run --release -- c2 status
 - フォルダー列挙に失敗したエントリと、検査対象拡張子のシンボリックリンクも `not_assessed` の行として出力します（以前は標準エラーのみ、またはスキップ）。列挙失敗の行は `kind=unknown` になる場合があります。
 - 標準エラーに `analyzed / incomplete / not_assessed` の件数サマリーを出します。
 - レポートに検体の本文、復号結果、一致した文字列は含めません。ローカルパスは含むため、取り扱いに注意してください。
+
+### 資源上限（P0-03）
+
+| 上限 | 既定値 | 到達時の扱い |
+| --- | --- | --- |
+| PE / スクリプトの入力サイズ | 64 MiB / 4 MiB | `not_assessed`（`size_limit_exceeded`） |
+| 復号層・深さ・累積復号量・候補数 | 16層・3段・512 KiB・種類ごと16〜32件 | `incomplete`（理由コード付き） |
+| 1ファイルの解析時間 `--file-time-limit-ms` | 10000 | `incomplete`（`analysis_time_limit`） |
+| 検査ファイル数 `--max-files` | 200000 | 走査を止め `status=scan_stopped`（`scan_file_limit`）の行を出力し、終了コード非0 |
+| 読み取り総量 `--max-total-bytes` | 32 GiB | 同上（`scan_byte_limit`） |
+| 走査時間 `--max-duration-secs` | 14400 | 同上（`scan_time_limit`） |
+| Ctrl-C | — | 処理中の単位を終えて `scan_cancelled` を記録し、終了コード非0 |
+
+走査は単一スレッドです。ZIP等のアーカイブ展開は実装していません。JSONL出力のサイズ上限とローテーションはP0-04で扱います。
 
 ### 今後の本番機能
 

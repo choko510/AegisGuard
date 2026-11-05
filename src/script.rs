@@ -1,5 +1,6 @@
 //! Static script triage. Never invokes, interprets, imports or evaluates sample code.
 //! Deobfuscation only recognizes bounded literal transformations.
+use crate::budget::Budget;
 use crate::model::Report;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use flate2::read::{GzDecoder, ZlibDecoder};
@@ -235,10 +236,20 @@ fn decode_b64(encoded: &str) -> (Option<String>, bool) {
     (looks_like_source(&expanded), false)
 }
 
-fn derive(text: &str, is_batch: bool) -> Derivations {
+fn derive(text: &str, is_batch: bool, budget: &Budget) -> Derivations {
     let mut out = Derivations::new();
+    // Each candidate is bounded work; stop between candidates once the budget is spent.
+    macro_rules! check_budget {
+        () => {
+            if let Some(reason) = budget.exceeded() {
+                out.note(reason);
+                return out;
+            }
+        };
+    }
     // Explicit PowerShell EncodedCommand is generally UTF-16LE.
     for (index, caps) in PS_ENC.captures_iter(text).enumerate().take(17) {
+        check_budget!();
         if index == 16 {
             out.note("candidate_match_limit");
             break;
@@ -254,6 +265,7 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
         }
     }
     for (index, matched) in B64.find_iter(text).enumerate().take(33) {
+        check_budget!();
         if index == 32 {
             out.note("candidate_match_limit");
             break;
@@ -275,6 +287,7 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
         }
     }
     for (index, caps) in JS_CHARCODE.captures_iter(text).enumerate().take(17) {
+        check_budget!();
         if index == 16 {
             out.note("candidate_match_limit");
             break;
@@ -293,6 +306,7 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
         }
     }
     for (index, matched) in PY_CHR_CHAIN.find_iter(text).enumerate().take(17) {
+        check_budget!();
         if index == 16 {
             out.note("candidate_match_limit");
             break;
@@ -312,6 +326,7 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
         }
     }
     for (index, matched) in CONCAT.find_iter(text).enumerate().take(25) {
+        check_budget!();
         if index == 24 {
             out.note("candidate_match_limit");
             break;
@@ -328,6 +343,7 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
         }
     }
     for (index, caps) in JS_REVERSE.captures_iter(text).enumerate().take(17) {
+        check_budget!();
         if index == 16 {
             out.note("candidate_match_limit");
             break;
@@ -337,6 +353,7 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
         }
     }
     for (index, matched) in HEX_ESCAPE.find_iter(text).enumerate().take(17) {
+        check_budget!();
         if index == 16 {
             out.note("candidate_match_limit");
             break;
@@ -352,6 +369,7 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
         }
     }
     for (index, matched) in UNICODE_ESCAPE.find_iter(text).enumerate().take(17) {
+        check_budget!();
         if index == 16 {
             out.note("candidate_match_limit");
             break;
@@ -369,6 +387,7 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
             out.push("unicode_escape", value);
         }
     }
+    check_budget!();
     if is_batch {
         // No environment lookups or execution; only literal assignments in the sample.
         // A malicious script can bury SET assignments beyond the scan window.
@@ -496,7 +515,7 @@ fn analyze_layer(layer: &Layer, report: &mut Report) {
     }
 }
 
-pub fn inspect(data: &[u8], report: &mut Report) {
+pub fn inspect(data: &[u8], report: &mut Report, budget: &Budget) {
     // scan.rs caps input at 4 MiB, including partially written files.
     // Root files are capped by scan.rs at 4 MiB; derived layers are capped separately.
     // Decode UTF-16 even for large root scripts instead of silently missing their text.
@@ -525,6 +544,10 @@ pub fn inspect(data: &[u8], report: &mut Report) {
     let mut processed = 0usize;
 
     while let Some(layer) = queue.pop_front() {
+        if let Some(reason) = budget.exceeded() {
+            report.mark_incomplete(reason);
+            break;
+        }
         if processed >= MAX_LAYERS {
             break;
         }
@@ -534,7 +557,7 @@ pub fn inspect(data: &[u8], report: &mut Report) {
         }
         processed += 1;
         analyze_layer(&layer, report);
-        let derived = derive(&layer.text, is_batch);
+        let derived = derive(&layer.text, is_batch, budget);
         for reason in derived.reasons {
             report.mark_incomplete(reason);
         }
@@ -569,13 +592,18 @@ pub fn inspect(data: &[u8], report: &mut Report) {
 }
 
 #[cfg(test)]
+fn test_budget() -> Budget {
+    Budget::new(std::time::Duration::from_secs(60))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::Report;
 
     fn scan(code: &str, path: &str) -> Report {
         let mut report = Report::new(path.into(), "script");
-        inspect(code.as_bytes(), &mut report);
+        inspect(code.as_bytes(), &mut report, &test_budget());
         report.finish();
         report
     }
@@ -658,7 +686,7 @@ mod resource_limit_tests {
 
     fn inspect_sample(sample: &str, name: &str) -> Report {
         let mut r = Report::new(name.into(), "script");
-        inspect(sample.as_bytes(), &mut r);
+        inspect(sample.as_bytes(), &mut r, &test_budget());
         r.finish();
         r
     }
@@ -745,7 +773,7 @@ mod candidate_limit_tests {
             .collect::<Vec<_>>()
             .join(" ");
         let mut report = Report::new("many.py".into(), "script");
-        inspect(sample.as_bytes(), &mut report);
+        inspect(sample.as_bytes(), &mut report, &test_budget());
         report.finish();
         assert_eq!(report.status, "incomplete");
         assert!(report.incomplete_reasons.contains(&"candidate_match_limit"));
@@ -758,7 +786,7 @@ mod candidate_limit_tests {
             .collect::<Vec<_>>()
             .join("\n");
         let mut report = Report::new("many.cmd".into(), "script");
-        inspect(sample.as_bytes(), &mut report);
+        inspect(sample.as_bytes(), &mut report, &test_budget());
         report.finish();
         assert!(report
             .incomplete_reasons
@@ -770,10 +798,150 @@ mod candidate_limit_tests {
     fn omitted_batch_lines_are_marked_incomplete() {
         let sample = format!("{}set \"x=A\"\n%x%", "rem no-op\n".repeat(512));
         let mut report = Report::new("many.bat".into(), "script");
-        inspect(sample.as_bytes(), &mut report);
+        inspect(sample.as_bytes(), &mut report, &test_budget());
         report.finish();
         assert!(report
             .incomplete_reasons
             .contains(&"batch_assignment_scan_limit"));
+    }
+}
+
+#[cfg(test)]
+mod budget_and_property_tests {
+    use super::*;
+    use crate::model::{Assessment, Report};
+    use std::time::Duration;
+
+    /// Deterministic xorshift PRNG so failures are reproducible without extra crates.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    fn run(data: &[u8], name: &str, budget: Duration) -> Report {
+        let mut report = Report::new(name.into(), "script");
+        inspect(data, &mut report, &Budget::new(budget));
+        report.finish();
+        report
+    }
+
+    fn assert_contract(r: &Report) {
+        assert_eq!(r.analysis_complete, r.assessment == Assessment::Analyzed);
+        if r.risk == "low_signal" {
+            assert_eq!(r.assessment, Assessment::Analyzed);
+        }
+        if r.assessment == Assessment::Incomplete {
+            assert!(!r.incomplete_reasons.is_empty());
+        }
+        assert!(r.decoded_layers < MAX_LAYERS);
+        assert!(r.score <= 100);
+    }
+
+    #[test]
+    fn exhausted_time_budget_is_incomplete_not_clean() {
+        let r = run(b"print('hello')", "x.py", Duration::ZERO);
+        assert_eq!(r.assessment, Assessment::Incomplete);
+        assert_eq!(r.risk, "incomplete");
+        assert!(r.incomplete_reasons.contains(&"analysis_time_limit"));
+        assert_contract(&r);
+    }
+
+    #[test]
+    fn randomized_obfuscation_fragments_never_panic_or_break_the_contract() {
+        let fragments = [
+            "QWRkLU1wUHJlZmVyZW5jZSAtRXhjbHVzaW9uUGF0aCBDOlxUZW1w",
+            "String.fromCharCode(65,109,115,105,85,116,105,108,115)",
+            "chr(65)+chr(66)+chr(67)",
+            "'ab'+'cd'+'ef'",
+            "\"olleh\".split('').reverse().join('')",
+            "\\x41\\x42\\x43\\x44",
+            "\\u0041\\u0042\\u0043\\u0044",
+            "set \"A=x\"\n",
+            "%A%%A%",
+            "^",
+            "-enc ",
+            "exec(",
+            "requests.post('https://example.invalid')",
+            "\n",
+            "====",
+            "\u{0}",
+            "\u{fffd}",
+        ];
+        let mut rng = Rng(0x5eed_a3a3_1234_9876);
+        for i in 0..400 {
+            let mut sample = String::new();
+            for _ in 0..rng.below(200) {
+                sample.push_str(fragments[rng.below(fragments.len())]);
+            }
+            let name = ["x.py", "x.js", "x.ps1", "x.bat"][i % 4];
+            let mut bytes = sample.into_bytes();
+            // Occasionally corrupt bytes or force a UTF-16 interpretation.
+            if i % 7 == 0 && !bytes.is_empty() {
+                let at = rng.below(bytes.len());
+                bytes[at] = rng.next() as u8;
+            }
+            if i % 11 == 0 {
+                bytes.splice(0..0, [0xff, 0xfe]);
+            }
+            assert_contract(&run(&bytes, name, Duration::from_secs(60)));
+        }
+    }
+
+    #[test]
+    fn random_binary_input_never_panics() {
+        let mut rng = Rng(0xdead_beef_cafe_f00d);
+        for _ in 0..300 {
+            let len = rng.below(4096);
+            let bytes: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+            assert_contract(&run(&bytes, "x.js", Duration::from_secs(60)));
+        }
+    }
+
+    #[test]
+    fn adversarial_repetitions_are_bounded_and_explained() {
+        let cases: [(&str, &str); 7] = [
+            ("x.py", "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0NTY3"),
+            ("x.js", "fromCharCode(65,66,67,68,69,70,71,72) "),
+            ("x.py", "chr(65)+"),
+            ("x.js", "'aaaa'+"),
+            ("x.js", "\\x41"),
+            ("x.bat", "a^"),
+            ("x.bat", "%A%"),
+        ];
+        for (name, unit) in cases {
+            let sample = unit.repeat((1024 * 1024) / unit.len());
+            let r = run(sample.as_bytes(), name, Duration::from_secs(60));
+            assert_contract(&r);
+        }
+    }
+
+    #[test]
+    fn high_ratio_compressed_payload_is_capped() {
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        let chunk = vec![b'A'; 1024 * 1024];
+        for _ in 0..64 {
+            encoder.write_all(&chunk).unwrap();
+        }
+        let compressed = encoder.finish().unwrap();
+        // 64 MiB expands from a few dozen KiB; the decoder must stop at the layer cap.
+        assert!(compressed.len() < 96 * 1024);
+        assert!(inflate_bounded(&compressed).is_none());
+        let payload = STANDARD.encode(&compressed);
+        let r = run(
+            format!("exec(base64.b64decode('{payload}'))").as_bytes(),
+            "x.py",
+            Duration::from_secs(60),
+        );
+        assert_contract(&r);
+        assert_eq!(r.assessment, Assessment::Incomplete);
     }
 }

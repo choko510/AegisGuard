@@ -202,7 +202,7 @@ impl Report {
         if !self.incomplete_reasons.contains(&reason) {
             self.incomplete_reasons.push(reason);
         }
-        self.warning = Some("Deobfuscation was incomplete; undetected behavior is possible".into());
+        self.warning = Some("Analysis was incomplete; undetected behavior is possible".into());
     }
 
     pub fn finish(&mut self) {

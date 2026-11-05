@@ -1,3 +1,4 @@
+mod budget;
 mod c2;
 mod fsafe;
 mod model;
@@ -7,6 +8,7 @@ mod script;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::time::Duration;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
@@ -32,6 +34,18 @@ enum Commands {
         /// Append reports to a local JSONL file; never uploads samples.
         #[arg(long)]
         output: Option<PathBuf>,
+        /// Per-file analysis time budget; reaching it marks the file incomplete.
+        #[arg(long, default_value_t = 10_000)]
+        file_time_limit_ms: u64,
+        /// Stop after this many scan targets (an explicit scan_stopped record is written).
+        #[arg(long, default_value_t = 200_000)]
+        max_files: u64,
+        /// Stop after reading this many bytes in total.
+        #[arg(long, default_value_t = 32 * 1024 * 1024 * 1024)]
+        max_total_bytes: u64,
+        /// Stop after this many seconds of wall-clock time.
+        #[arg(long, default_value_t = 4 * 3600)]
+        max_duration_secs: u64,
     },
     /// Manage a locally cached list of public C2 indicators.
     C2 {
@@ -67,7 +81,19 @@ fn main() -> Result<()> {
             path,
             recursive,
             output,
-        } => scan::run(&path, recursive, output.as_deref())?,
+            file_time_limit_ms,
+            max_files,
+            max_total_bytes,
+            max_duration_secs,
+        } => {
+            let limits = scan::Limits {
+                per_file: Duration::from_millis(file_time_limit_ms),
+                max_files,
+                max_total_bytes,
+                max_duration: Duration::from_secs(max_duration_secs),
+            };
+            scan::run(&path, recursive, output.as_deref(), limits)?
+        }
         Commands::C2 { command } => match command {
             C2Command::Update { cache } => c2::update(&cache)?,
             C2Command::Check { ip, cache } => c2::check(&cache, ip)?,

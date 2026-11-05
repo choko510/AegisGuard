@@ -8,7 +8,9 @@ use std::process::Command;
 const FIXTURES: &str = "tests/fixtures/scan";
 const GOLDEN: &str = "tests/golden/scan_fixtures_v2.json";
 const V1_RISKS: [&str; 5] = ["low_signal", "incomplete", "review", "high", "not_assessed"];
-const V1_STATUSES: [&str; 6] = [
+// v1 statuses plus `scan_stopped`, added with run-level budgets.
+const V1_STATUSES: [&str; 7] = [
+    "scan_stopped",
     "analyzed",
     "incomplete",
     "unsupported",
@@ -24,23 +26,29 @@ struct Run {
 }
 
 fn scan(args: &[&str]) -> Run {
+    let (run, success) = scan_allowing_failure(args);
+    assert!(success, "scan failed: {}", run.stderr);
+    run
+}
+
+fn scan_allowing_failure(args: &[&str]) -> (Run, bool) {
     let out = Command::new(env!("CARGO_BIN_EXE_aegisguard"))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .arg("scan")
         .args(args)
         .output()
         .expect("run aegisguard");
-    assert!(out.status.success(), "scan failed: {out:?}");
     let stdout = String::from_utf8(out.stdout).unwrap();
     let reports = stdout
         .lines()
         .map(|line| serde_json::from_str(line).expect("each stdout line is one JSON report"))
         .collect();
-    Run {
+    let run = Run {
         reports,
         stdout,
         stderr: String::from_utf8(out.stderr).unwrap(),
-    }
+    };
+    (run, out.status.success())
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -259,4 +267,45 @@ fn unreadable_file_is_not_assessed() {
     if enforced {
         assert_eq!(report["not_assessed_reason"], "open_failed");
     }
+}
+
+#[test]
+fn file_limit_stops_with_explicit_record_and_failure_exit() {
+    let (run, success) = scan_allowing_failure(&[FIXTURES, "--max-files", "2"]);
+    assert!(!success, "a stopped scan must not exit successfully");
+    assert_eq!(run.reports.len(), 3);
+    let stop = run.reports.last().unwrap();
+    assert_eq!(stop["status"], "scan_stopped");
+    assert_eq!(stop["not_assessed_reason"], "scan_file_limit");
+    for report in &run.reports {
+        assert_v1_compatible(report);
+        assert_completeness_contract(report);
+    }
+}
+
+#[test]
+fn byte_limit_stops_the_scan() {
+    let (run, success) = scan_allowing_failure(&[FIXTURES, "--max-total-bytes", "1"]);
+    assert!(!success);
+    let stop = run.reports.last().unwrap();
+    assert_eq!(stop["not_assessed_reason"], "scan_byte_limit");
+}
+
+#[test]
+fn zero_time_budget_never_reads_as_clean() {
+    let run = scan(&[FIXTURES, "--file-time-limit-ms", "0"]);
+    for report in &run.reports {
+        assert_completeness_contract(report);
+        assert_ne!(report["assessment"], "analyzed", "{report}");
+    }
+    assert!(run.reports.iter().any(|r| r["incomplete_reasons"]
+        .as_array()
+        .unwrap()
+        .contains(&"analysis_time_limit".into())));
+}
+
+#[test]
+fn limits_not_reached_exit_successfully_without_stop_record() {
+    let run = scan(&[FIXTURES, "--max-files", "4"]);
+    assert!(run.reports.iter().all(|r| r["status"] != "scan_stopped"));
 }

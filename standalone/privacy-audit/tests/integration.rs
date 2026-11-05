@@ -175,7 +175,10 @@ fn duplicate_json_keys_fail_closed_even_with_unicode_escapes() {
 
 #[test]
 fn ordinary_json_arrays_remain_clean_when_no_secrets_exist() {
-    let output = audit_reader(&br#"[{"items":["hello","world"]},{"ok":true}]"#[..], Mode::Auto);
+    let output = audit_reader(
+        &br#"[{"items":["hello","world"]},{"ok":true}]"#[..],
+        Mode::Auto,
+    );
     assert_eq!(output["status"], "complete");
     assert_eq!(output["coverage"]["json_lines"], 1);
     assert_eq!(exit_code(&output), 0);

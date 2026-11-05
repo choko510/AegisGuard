@@ -135,7 +135,10 @@ fn opt_codes(probe: &Map<String, Value>, field: &str) -> Result<Option<Vec<u64>>
     }
 }
 
-fn secure_boot(probe: Option<&Map<String, Value>>, checked_at: u64) -> Result<PostureControl, &'static str> {
+fn secure_boot(
+    probe: Option<&Map<String, Value>>,
+    checked_at: u64,
+) -> Result<PostureControl, &'static str> {
     let mut result = PostureControl::new("secure_boot", "Confirm-SecureBootUEFI", checked_at);
     if early(&mut result, probe) {
         return Ok(result);
@@ -150,7 +153,10 @@ fn secure_boot(probe: Option<&Map<String, Value>>, checked_at: u64) -> Result<Po
     Ok(result)
 }
 
-fn tpm(probe: Option<&Map<String, Value>>, checked_at: u64) -> Result<PostureControl, &'static str> {
+fn tpm(
+    probe: Option<&Map<String, Value>>,
+    checked_at: u64,
+) -> Result<PostureControl, &'static str> {
     let mut result = PostureControl::new("tpm_2_0", "Win32_Tpm.SpecVersion;IsReady", checked_at);
     if early(&mut result, probe) {
         return Ok(result);
@@ -183,8 +189,16 @@ fn device_guard(
     probe: Option<&Map<String, Value>>,
     checked_at: u64,
 ) -> Result<(PostureControl, PostureControl), &'static str> {
-    let mut vbs = PostureControl::new("vbs", "Win32_DeviceGuard.VirtualizationBasedSecurityStatus", checked_at);
-    let mut hvci = PostureControl::new("hvci", "Win32_DeviceGuard.SecurityServicesRunning", checked_at);
+    let mut vbs = PostureControl::new(
+        "vbs",
+        "Win32_DeviceGuard.VirtualizationBasedSecurityStatus",
+        checked_at,
+    );
+    let mut hvci = PostureControl::new(
+        "hvci",
+        "Win32_DeviceGuard.SecurityServicesRunning",
+        checked_at,
+    );
     if early(&mut vbs, probe) {
         let _ = early(&mut hvci, probe);
         return Ok((vbs, hvci));
@@ -196,7 +210,10 @@ fn device_guard(
 
     let contradictory = running.as_ref().is_some_and(|codes| {
         codes.contains(&0) && codes.iter().any(|code| *code != 0)
-            || codes.iter().enumerate().any(|(i, code)| codes[..i].contains(code))
+            || codes
+                .iter()
+                .enumerate()
+                .any(|(i, code)| codes[..i].contains(code))
             || codes.contains(&2) && state != Some(2)
     });
 
@@ -226,7 +243,11 @@ fn device_guard(
     if let Some(running) = &running {
         if state.is_some_and(|s| s <= 2) {
             hvci.availability = "supported";
-            hvci.state = if running.contains(&2) { "enabled" } else { "disabled" };
+            hvci.state = if running.contains(&2) {
+                "enabled"
+            } else {
+                "disabled"
+            };
             if hvci.state == "disabled" && configured.as_ref().is_some_and(|c| c.contains(&2)) {
                 hvci.warnings.push("configured_but_not_running");
             }
@@ -239,7 +260,10 @@ fn device_guard(
     Ok((vbs, hvci))
 }
 
-fn bitlocker(probe: Option<&Map<String, Value>>, checked_at: u64) -> Result<PostureControl, &'static str> {
+fn bitlocker(
+    probe: Option<&Map<String, Value>>,
+    checked_at: u64,
+) -> Result<PostureControl, &'static str> {
     let mut result = PostureControl::new(
         "bitlocker_os_volume",
         "Win32_EncryptableVolume.GetProtectionStatus;GetConversionStatus",
@@ -311,7 +335,12 @@ pub fn evaluate(input: &Value, checked_at: u64) -> Result<Value, &'static str> {
     let device_raw = probe(
         root,
         "device_guard",
-        &["status", "vbs_status", "running_services", "configured_services"],
+        &[
+            "status",
+            "vbs_status",
+            "running_services",
+            "configured_services",
+        ],
     )?;
     let bitlocker_raw = probe(
         root,
@@ -327,10 +356,7 @@ pub fn evaluate(input: &Value, checked_at: u64) -> Result<Value, &'static str> {
         hvci,
         bitlocker(bitlocker_raw, checked_at)?,
     ];
-    let entries: Vec<Value> = controls
-        .into_iter()
-        .map(PostureControl::value)
-        .collect();
+    let entries: Vec<Value> = controls.into_iter().map(PostureControl::value).collect();
     let assessed = entries
         .iter()
         .filter(|value| {

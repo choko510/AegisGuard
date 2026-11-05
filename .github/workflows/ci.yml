@@ -58,6 +58,28 @@ jobs:
       - name: Repository rules pass the gate
         run: cargo run --locked --features yara -- rules check rules/aegisguard
 
+  ui:
+    # egui/eframe desktop UI (workspace member apps/aegis-ui, needs Rust >= 1.95).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Linux font for headless rendering tests
+        if: runner.os == 'Linux'
+        run: test -f /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf || (sudo apt-get update && sudo apt-get install -y fonts-dejavu-core)
+      - name: Clippy (ui)
+        run: cargo clippy --locked -p aegis-ui --all-targets -- -D warnings
+      - name: Tests (ui, headless)
+        run: cargo test --locked -p aegis-ui
+
   msrv:
     runs-on: ubuntu-latest
     steps:

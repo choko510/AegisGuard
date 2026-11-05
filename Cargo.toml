@@ -26,6 +26,12 @@ walkdir = "2"
 # PE/ELF/.NET/ZIP/etc. parsers and their dependencies are not compiled in.
 yara-x = { version = "1.22.1", optional = true, default-features = false, features = ["constant-folding", "exact-atoms", "fast-regexp", "generate-proto-code"] }
 
+[workspace]
+# The GUI is a separate member with its own rust-version (eframe needs 1.95);
+# plain `cargo build/test` at the root still builds only the CLI and library.
+members = [".", "apps/aegis-ui"]
+default-members = ["."]
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

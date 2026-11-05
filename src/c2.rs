@@ -376,6 +376,31 @@ fn source_overview(cache: &Cache, now: u64) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Offline lookup of fresh (non-expired) IOC sources, for event correlation.
+pub struct IocLookup {
+    cache: Cache,
+    now: u64,
+}
+
+impl IocLookup {
+    pub fn load(path: &Path) -> Result<Self> {
+        let (cache, _) = read_cache(path)?;
+        Ok(Self {
+            cache,
+            now: epoch(),
+        })
+    }
+
+    /// Feeds that list `ip` with fresh data; stale matches are not returned.
+    pub fn fresh_sources(&self, ip: &str) -> Vec<String> {
+        let Ok(ip) = ip.parse::<IpAddr>() else {
+            return Vec::new();
+        };
+        let (fresh, _) = effective_matches(&self.cache, ip, self.now);
+        fresh.into_iter().map(str::to_owned).collect()
+    }
+}
+
 pub fn check(path: &Path, ip: IpAddr) -> Result<()> {
     let (cache, generation) = read_cache(path)?;
     let now = epoch();
@@ -618,6 +643,26 @@ mod tests {
         // Without any valid generation the cache is an error, not an empty list.
         std::fs::write(store::previous_path(&path), b"{").unwrap();
         assert!(read_cache(&path).is_err());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ioc_lookup_returns_only_fresh_sources() {
+        let path = temp_cache("lookup");
+        let mut cache = Cache::default();
+        let now = epoch();
+        assert!(apply_feed(&mut cache, "feodo", "1.2.3.4", now));
+        assert!(apply_feed(
+            &mut cache,
+            "c2intel_verified",
+            "5.6.7.8,IOC",
+            now - FEED_TTL_SECONDS - 10
+        ));
+        write_cache(&path, &cache).unwrap();
+        let lookup = IocLookup::load(&path).unwrap();
+        assert_eq!(lookup.fresh_sources("1.2.3.4"), vec!["feodo".to_owned()]);
+        assert!(lookup.fresh_sources("5.6.7.8").is_empty());
+        assert!(lookup.fresh_sources("not-an-ip").is_empty());
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

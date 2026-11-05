@@ -144,6 +144,7 @@ aegisguard events collect --channel Microsoft-Windows-Sysmon/Operational --spool
 - ブックマークの記録が消えた（ログが上書きされた）場合や `EventRecordID` が飛んだ場合は、`gaps` に記録して `status=gap` にします。未来のイベントだけに切り替えて黙って続けることはしません。チャネルが無い・権限がない場合は `status=degraded` で、終了コードは非0です。
 - 保存するのは許可リストのフィールドだけです（ProcessGuid・Image・宛先IP/ポート・DNS名・ハッシュ等）。`CommandLine` はSHA-256だけを保存し、ユーザー名や端末名は保存しません。
 - `aegisguard events processes --spool dataventssysmon.jsonl` はスプールからProcessGuid単位のプロセスの生存期間（作成・終了・通信先・DNS・DLLロード数・アクセス先）を組み立てます。PIDだけでは同一視しません。作成イベントを見ていないプロセスは `start_observed=false`、重複・時刻の逆転・同じPIDの同時生存は `anomalies` に出します。**観測されなかったイベント種別（例：Sysmon ID 3/7/22が無効）は `unobserved` に出し、「通信なし」とは扱いません。**
+- `aegisguard events correlate --spool ... --c2-cache datar-cache.json` は組み込みの相関ルール（AG-C001：Officeアプリがスクリプトホスト等を起動、AG-C002：起動後5分以内に新鮮なC2 IOCへ接続、AG-C003：1分以内に子プロセス10個以上）をオフラインで実行します。結果は確認のための根拠（`review` / `observed`）で、悪性の判定ではありません。必要なイベント種別が観測されていないルールは `evaluable=false` と `missing_sources` で示します。遮断・削除はしません。
 
 ### 今後の本番機能
 

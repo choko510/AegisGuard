@@ -3,6 +3,7 @@
 //! `EventEnvelope v1` with an allow-list of fields, and spooled durably.
 //! Command lines are never stored verbatim, only as SHA-256 digests.
 pub mod collector;
+pub mod correlate;
 pub mod process;
 
 #[cfg(windows)]

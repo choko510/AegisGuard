@@ -152,6 +152,15 @@ enum EventsCommand {
         #[arg(long, default_value = "data/events/sysmon.jsonl")]
         spool: PathBuf,
     },
+    /// Run the built-in correlation rules over a spool, offline. Findings are
+    /// reasons to look, not verdicts; nothing is blocked or deleted.
+    Correlate {
+        #[arg(long, default_value = "data/events/sysmon.jsonl")]
+        spool: PathBuf,
+        /// C2 cache for AG-C002 (only fresh indicators count).
+        #[arg(long, default_value = "data/c2-cache.json")]
+        c2_cache: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -422,6 +431,25 @@ fn main() -> Result<()> {
                     max_events,
                 },
         } => collect_events(&channel, spool, checkpoint, max_events)?,
+        Commands::Events {
+            command: EventsCommand::Correlate { spool, c2_cache },
+        } => {
+            let (events, bad_lines) = events::process::read_spool(&spool)?;
+            let table = events::process::ProcessTable::build(&events);
+            let iocs = c2::IocLookup::load(&c2_cache)?;
+            let result = events::correlate::correlate(&table, &|ip| iocs.fresh_sources(ip));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "events": events.len(),
+                    "bad_lines": bad_lines,
+                    "duplicates": table.duplicates,
+                    "anomalies": table.anomalies.len(),
+                    "unobserved": table.unobserved(),
+                    "correlation": result,
+                })
+            );
+        }
         Commands::Events {
             command: EventsCommand::Processes { spool },
         } => {

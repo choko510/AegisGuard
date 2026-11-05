@@ -15,7 +15,7 @@ Microsoft Defenderを無効化せず、EXE / DLL / スクリプトの静的解�
 - スクリプトの限定的な静的難読化解除：Base64、UTF-16、zlib/gzip、JS fromCharCode、Python chr列、文字列連結、JS文字列逆転、16進/Unicodeエスケープ、BATの変数・キャレット
 - デコード深度3、最大16層、復元バイト数の上限、入力ファイルサイズ上限
 - 公開C2 IPフィードの**手動更新とオフライン照合**（Feodo Tracker／C2IntelFeeds）。キャッシュ不鮮度を表示。通信遮断なし
-- Windows・Linux両環境でCargoのfmt／clippy／テストを走らせるGitHub Actions
+- GitHub Actions：Windows・Linuxでfmt／clippy／テスト、宣言したMSRV（1.85）でのビルド、`cargo-deny` によるライセンス・脆弱性・取得元の検査、ライセンス一覧とCycloneDX SBOMの生成、合成コーパスでの性能・誤検知ベースライン計測（毎週の定期実行あり）。Actionはコミットハッシュで固定し、`Cargo.lock` をコミットしています
 
 ## 必要な環境
 

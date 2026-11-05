@@ -24,3 +24,38 @@ CIの `baseline` ジョブが毎回同じ合成コーパスで再計測し、ジ
 
 - `benign_admin`（インストーラーのダウンロード＋`Start-Process`、スケジュールタスク登録、`requests`＋`subprocess`）は**全件が誤検知候補**です。現行ヒューリスティックの既知の弱点として残し、ルール変更時はこの表と比較します。
 - 合成データだけの結果で、実環境の検出率・誤検知率ではありません。
+
+## P5-02 誤警告対策後（組み込みルール `builtin-static-2`）
+
+`src/script.rs` に、コメントの分離（PowerShell `#`/`<# #>`、Python `#`、JavaScript `//`/`/* */`、BAT `rem`/`::`、VBS `'`。文字列リテラル内の記号はコメント扱いしない）と、文（行継続・`;`）単位の評価を追加した。
+
+- **ダウンロード→コード実行**（`download_and_execute`, 45）：取得した内容が、同じ文で、または取得結果を代入した変数（推移的に追跡）を通して `iex` / `Invoke-Expression` / `eval` / `exec` などへ渡る場合だけ。
+- **ダウンロードとプロセス起動が同じファイルにあるだけ**：`download_and_run`（20、記録はするが単独では `low_signal`）。平文HTTP・IPアドレスのURL・一時/ユーザー書込み可能パス・非表示ウィンドウを伴えば `download_and_run_staged`（35、`review`）。
+- **永続化**：Runキー、またはスクリプトホスト・非表示/エンコード済みコマンド・ユーザー書込み可能パス・URLを実行するタスク/サービスは `persistence`（30）。それ以外のタスク/サービス作成は `persistence_admin_task`（15）。
+- **コメント内だけの指標**：`indicator_in_comment_only`（5）として記録し、隠さない。
+- 資格情報参照＋送信（`possible_exfiltration`, 75）は従来どおりファイル単位の共起で判定し、弱めていない。
+
+### 合成コーパス（`summarize --check` でCIのゲートにした）
+
+| category | low_signal | review | high | incomplete | not_assessed |
+|---|---|---|---|---|---|
+| benign | 400 | 0 | 0 | 0 | 0 |
+| benign_admin（元の300件、期待値は書き換えていない） | 300 | 0 | 0 | 0 | 0 |
+| benign_admin_extra（コメント内の指標・更新確認：新規の対照群） | 300 | 0 | 0 | 0 | 0 |
+| benign_pe | 100 | 0 | 0 | 0 | 0 |
+| synthetic_positive（元の100件） | 0 | 0 | 100 | 0 | 0 |
+| synthetic_positive_more（取得→実行、危険な永続化＋除外設定：新規） | 0 | 200 | 100 | 0 | 0 |
+
+ゲート：`benign_admin` の review/high が15件以下、他の benign 系は0件、`synthetic_positive*` は全件が review 以上。合成データでの結果であり、実環境の誤検知率・検出率ではない。
+
+### 実機（このWindows 11の付属スクリプト、読み取りのみ）
+
+2026-11-05、変更前（`builtin-static-1`）と変更後を同じファイルで比較（スクリプトのみ集計）。
+
+| 対象 | 変更前 review/high | 変更後 review/high |
+|---|---|---|
+| `C:\Windows\System32\WindowsPowerShell\v1.0`（239件） | 7 / 1 | 3 / 1 |
+| `C:\Program Files\WindowsPowerShell\Modules`（103件） | 2 / 0 | 1 / 0 |
+| `C:\Windows\diagnostics`（378件） | 0 / 0 | 0 / 0 |
+
+残る指摘の主因は、モジュールマニフェスト（`.psd1`）がコマンド名を**文字列として列挙**していること（例：`Invoke-Expression` を含むエクスポート一覧）。文字列リテラルと実際の呼び出しの区別は構文解析（P5-03）で扱う。`PSDesiredStateConfiguration.psm1` は review から `incomplete`（既存の `candidate_match_limit`）に変わったが、未完了の表示であり安全扱いではない。

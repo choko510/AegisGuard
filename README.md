@@ -246,7 +246,7 @@ cargo run --release -p aegis-ui            # Rust 1.95以上が必要（CLIは1.
 
 ### 未実装の機能
 
-未実装：常駐のWindowsサービスとIPC（必要になった場合のみ）、AMSI連携、許諾を確認したドメインIOCフィード、ルールパックの配信、**Windows Firewallへの実際の遮断の適用**（隔離VMでの復旧の実証と明示の承認が前提）、プロセスメモリの検査（別途承認が前提）、常駐GUI。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。
+未実装・保留：**Windows Firewallへの実際の遮断の適用（P10-01）と実行前・書き込み前の阻止（P10-02）**（隔離VMでの復旧の実証と所有者の明示の承認が前提）、プロセスメモリの検査（P4-04、別途承認が前提）、AMSI連携、許諾を確認したドメインIOCフィード、ルールパックの自動配信（署名鍵の運用が未決定）、JavaScript/Pythonの構文解析（P5-03の第2・第3段階）。出荷品質ゲート（P10-03）は未達で、実測の記録は [docs/RELEASE_GATE.md](docs/RELEASE_GATE.md) にあります。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。
 
 ## 脅威フィード
 

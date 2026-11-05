@@ -1,6 +1,6 @@
-use driver_inventory::{error_report, fixture, report, MAX_FIXTURE_BYTES};
 #[cfg(not(windows))]
 use driver_inventory::Collection;
+use driver_inventory::{error_report, fixture, report, MAX_FIXTURE_BYTES};
 use serde_json::Value;
 use std::io::Read;
 
@@ -27,12 +27,23 @@ fn live(drivers_only: bool, verify_signatures: bool, show_paths: bool) -> Value 
 #[cfg(not(windows))]
 fn live(drivers_only: bool, _verify_signatures: bool, show_paths: bool) -> Value {
     let _ = show_paths;
-    report(Collection { services: Vec::new(), enumeration_status: "unavailable",
-        error_code: Some("windows_required"), pages: 0 }, drivers_only, false, r"C:\Windows")
+    report(
+        Collection {
+            services: Vec::new(),
+            enumeration_status: "unavailable",
+            error_code: Some("windows_required"),
+            pages: 0,
+        },
+        drivers_only,
+        false,
+        r"C:\Windows",
+    )
 }
 
 fn execute(args: &[String]) -> Result<Value, &'static str> {
-    let Some(command) = args.first().map(String::as_str) else { return Err("missing_command"); };
+    let Some(command) = args.first().map(String::as_str) else {
+        return Err("missing_command");
+    };
     match command {
         "list" => {
             let mut drivers_only = false;
@@ -56,13 +67,19 @@ fn execute(args: &[String]) -> Result<Value, &'static str> {
                 }
                 i += 1;
             }
-            if !format_seen { return Err("format_required"); }
+            if !format_seen {
+                return Err("format_required");
+            }
             Ok(live(drivers_only, verify_signatures, show_paths))
         }
         "inspect-fixture" => {
-            if args.len() < 2 { return Err("fixture_required"); }
+            if args.len() < 2 {
+                return Err("fixture_required");
+            }
             let path = &args[1];
-            if path.starts_with('-') { return Err("invalid_fixture_path"); }
+            if path.starts_with('-') {
+                return Err("invalid_fixture_path");
+            }
             let mut drivers_only = false;
             let mut show_paths = false;
             for arg in &args[2..] {
@@ -75,9 +92,12 @@ fn execute(args: &[String]) -> Result<Value, &'static str> {
             // Read input without executing or probing any fixture path.
             let file = std::fs::File::open(path).map_err(|_| "fixture_open_failed")?;
             let mut bytes = Vec::new();
-            file.take(MAX_FIXTURE_BYTES as u64 + 1).read_to_end(&mut bytes)
+            file.take(MAX_FIXTURE_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
                 .map_err(|_| "fixture_read_failed")?;
-            if bytes.len() > MAX_FIXTURE_BYTES { return Err("fixture_size_limit"); }
+            if bytes.len() > MAX_FIXTURE_BYTES {
+                return Err("fixture_size_limit");
+            }
             let collection = fixture(&bytes)?;
             Ok(report(collection, drivers_only, show_paths, r"C:\Windows"))
         }
@@ -95,8 +115,13 @@ fn main() {
         }
     };
     let status = result["status"].as_str().unwrap_or("error");
-    println!("{}", serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".into()));
-    if status != "complete" { std::process::exit(1); }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".into())
+    );
+    if status != "complete" {
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]
@@ -105,14 +130,25 @@ mod tests {
     #[test]
     fn list_requires_explicit_json() {
         assert_eq!(execute(&["list".into()]).unwrap_err(), "format_required");
-        assert_eq!(execute(&["list".into(), "--format".into(), "xml".into()]).unwrap_err(),
-            "unsupported_format");
-        assert_eq!(execute(&["list".into(), "--format".into(), "json".into(),
-            "--unknown".into()]).unwrap_err(), "invalid_argument");
+        assert_eq!(
+            execute(&["list".into(), "--format".into(), "xml".into()]).unwrap_err(),
+            "unsupported_format"
+        );
+        assert_eq!(
+            execute(&[
+                "list".into(),
+                "--format".into(),
+                "json".into(),
+                "--unknown".into()
+            ])
+            .unwrap_err(),
+            "invalid_argument"
+        );
     }
     #[test]
     fn missing_fixture_fails_without_path_leak() {
-        let err = execute(&["inspect-fixture".into(), "this/path/does/not/exist".into()]).unwrap_err();
+        let err =
+            execute(&["inspect-fixture".into(), "this/path/does/not/exist".into()]).unwrap_err();
         let x = error_report(err);
         assert_eq!(x["status"], "error");
         assert!(!x.to_string().contains("this/path"));

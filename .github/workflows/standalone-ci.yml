@@ -1,0 +1,64 @@
+name: Standalone Rust Audit CI
+
+on:
+  pull_request:
+    paths:
+      - "standalone/**"
+      - ".github/workflows/standalone-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  independent-crates:
+    name: Check standalone on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - name: Normalize lockfiles and Rust formatting for initial validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          count=0
+          for manifest in standalone/*/Cargo.toml; do
+            count=$((count + 1))
+            cargo generate-lockfile --manifest-path "${manifest}"
+            cargo fmt --manifest-path "${manifest}" --all
+          done
+          test "$count" -gt 0
+          echo 'AEGIS_FORMAT_PATCH_BEGIN'
+          git --no-pager diff --no-ext-diff --no-color --unified=3 -- standalone/
+          echo 'AEGIS_FORMAT_PATCH_END'
+      - name: Validate independent Cargo crates
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for manifest in standalone/*/Cargo.toml; do
+            echo "::group::${manifest}"
+            cargo fmt --manifest-path "${manifest}" --all -- --check
+            cargo clippy --locked --manifest-path "${manifest}" --all-targets -- -D warnings
+            cargo test --locked --manifest-path "${manifest}" --all-targets
+            cargo build --release --locked --manifest-path "${manifest}"
+            echo "::endgroup::"
+          done
+      - name: Save CI-formatted sources and resolved lockfiles
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: formatted-standalone-sources
+          path: |
+            standalone/*/Cargo.lock
+            standalone/*/src/*.rs
+            standalone/*/tests/*.rs
+          if-no-files-found: error

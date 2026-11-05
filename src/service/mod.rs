@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub mod collect;
+pub mod correlate;
 pub mod findings;
 pub mod ipc;
 #[cfg(windows)]

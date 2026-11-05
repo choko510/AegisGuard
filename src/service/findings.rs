@@ -15,6 +15,15 @@ pub struct FindingsDoc {
     /// Rule statuses (evaluable / missing sources).
     pub rules: Vec<Value>,
     pub findings: Vec<Value>,
+    /// IOC attribution over the same window (`events iocs` format).
+    #[serde(default)]
+    pub network: Option<Value>,
+    /// Browser-hijack timelines over the same window.
+    #[serde(default)]
+    pub timelines: Option<Value>,
+    /// Findings first seen in the latest tick (for notifications).
+    #[serde(default)]
+    pub new_findings: usize,
 }
 
 pub fn path(layout: &Layout) -> std::path::PathBuf {

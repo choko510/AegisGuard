@@ -149,6 +149,17 @@ impl IocSet {
         })
     }
 
+    /// No indicators at all (used when the cache cannot be read; nothing
+    /// then counts as an IOC match, and the caller must say so).
+    pub fn empty(now: u64) -> Self {
+        Self {
+            c2: None,
+            local: Vec::new(),
+            allow: Vec::new(),
+            now,
+        }
+    }
+
     #[cfg(test)]
     pub fn from_parts(local: Vec<ListEntry>, allow: Vec<ListEntry>, now: u64) -> Self {
         Self {

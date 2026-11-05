@@ -132,10 +132,8 @@ fn ntfs_parent_directory_reparse_point_is_rejected() {
 fn ntfs_access_denied_mock_is_not_a_clean_result() {
     // Actual DACL-denial is covered by the opt-in Windows PowerShell runner.
     // Never change persistent ACLs during a standard unit test run.
-    let report = file_origin_audit::assess(
-        file_origin_audit::Evidence::PermissionDenied,
-        "windows_ads",
-    );
+    let report =
+        file_origin_audit::assess(file_origin_audit::Evidence::PermissionDenied, "windows_ads");
     assert_eq!(report.status, "permission_denied");
     assert_eq!(report.coverage, "permission_denied");
     assert_eq!(report.motw_present, None);

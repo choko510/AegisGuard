@@ -105,7 +105,7 @@ jobs:
             -NoNewWindow -PassThru
           $peak = 0
           while (-not $p.HasExited) {
-            try { $peak = [Math]::Max($peak, $p.PeakWorkingSet64) } catch {}
+            try { $p.Refresh(); $peak = [Math]::Max($peak, $p.PeakWorkingSet64) } catch {}
             Start-Sleep -Milliseconds 20
           }
           $sw.Stop()

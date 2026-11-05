@@ -1,0 +1,10 @@
+/target/
+/reports/
+/data/
+*.tmp
+*.bak
+*.log
+*.pdb
+.DS_Store
+.idea/
+.vscode/

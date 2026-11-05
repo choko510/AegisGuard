@@ -764,9 +764,15 @@ pub fn exit_code(output: &Value) -> i32 {
 pub fn self_test() -> Value {
     let fixtures = [
         (r#"{"Authorization":"Bearer syntheticabcdefgh1234"}"#, true),
-        (r#"{"event":{"CommandLine":"-Password syntheticPass1234"}}"#, true),
+        (
+            r#"{"event":{"CommandLine":"-Password syntheticPass1234"}}"#,
+            true,
+        ),
         (r#"{"Cookie":"session=syntheticCookieExample"}"#, true),
-        (r#"{"path":"C:\\Users\\test-person\\Desktop\\file.txt"}"#, true),
+        (
+            r#"{"path":"C:\\Users\\test-person\\Desktop\\file.txt"}"#,
+            true,
+        ),
         (r#"{"secret":"[REDACTED]"}"#, false),
         (r#"{"description":"token bucket rate limiter"}"#, false),
         (r#"{"filename":"base64_dGVzdF9ub3Rfc2VjcmV0"}"#, false),
@@ -807,7 +813,10 @@ mod tests {
         assert_eq!(json["status"], "complete");
         assert_eq!(json["coverage"]["json_lines"], 1);
         assert!(!json["entries"].as_array().unwrap().is_empty());
-        let log = audit_reader(&b"Authorization: Bearer syntheticTEST12345\n"[..], Mode::Log);
+        let log = audit_reader(
+            &b"Authorization: Bearer syntheticTEST12345\n"[..],
+            Mode::Log,
+        );
         assert_eq!(log["coverage"]["log_lines"], 1);
         assert_eq!(exit_code(&log), 2);
     }

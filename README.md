@@ -116,6 +116,23 @@ cargo build --release --features yara
 - 時間切れ・タイムアウト・エンジンエラーは `incomplete` になります。
 - 同梱ルール（`rules/aegisguard`）は自作のみです。第三者ルールは使用・再配布の許諾を確認して台帳に記録するまで追加しません。方式の比較と決定は [YARA_X_INTEGRATION.md](docs/research/decisions/YARA_X_INTEGRATION.md) を参照してください。
 
+#### 署名付きルールパック（P1-04）
+
+ルールの配布・更新は、Ed25519で署名したパックだけを受け付けます。**AegisGuardに組み込みの信頼済み鍵はありません。** 利用者が信頼する公開鍵を明示して使います。配信サーバーはなく、ローカルのパックディレクトリを対象にします。
+
+```powershell
+aegisguard rules keygen keys\maintainer            # maintainer.key（秘密鍵、所有者のみアクセス可）と maintainer.pub
+aegisguard rules pack rules\aegisguard --key keys\maintainer.key --sequence 2 --out pack2
+aegisguard rules install pack2 --trusted-key keys\maintainer.pub --store data\rules
+aegisguard scan C:\path --recursive --rule-store data\rules --trusted-key keys\maintainer.pub
+aegisguard rules rollback --trusted-key keys\maintainer.pub --store data\rules
+```
+
+- 導入時に、署名・鍵ID・有効期限（最長400日）・ペイロードのSHA-256と長さ・ファイル名・台帳・**連番が前回より大きいこと**（リプレイ拒否）・**コンパイルの合格**を検証します。どれかに失敗すると、導入済みのパックをそのまま使い続けます。
+- 導入済みパックは2世代で保存します。`rollback` は前世代を再検証してから戻します（最大連番は保持するので、戻した後に古いパックを再導入することはできません）。
+- `scan` は読み込むたびに署名と期限を再検証し、期限切れや信頼しない鍵の場合は走査を始めずにエラーにします。
+- `yara` featureのないビルドではコンパイルを確認できないため、パックを導入できません。
+
 ### 今後の本番機能
 
 Windowsサービス、Sysmonイベント1/3/7の購読とProcessGuid相関、AMSI連携、YARA-X、Authenticode、DNS/ドメインIOC、明示的なWindows Firewallアウトバウンド遮断と安全な巻き戻し、ログローテーション、署名付きルール更新、GUIなどを段階的に追加します。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。

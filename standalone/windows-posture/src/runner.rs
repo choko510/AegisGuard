@@ -78,6 +78,7 @@ pub fn run_program(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
 
     #[cfg(unix)]

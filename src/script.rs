@@ -296,39 +296,53 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
         }
     }
     if is_batch {
-        // Do not expand real environment variables: only literal 'set' assignments in the sample.
+        // No environment lookups or execution; only literal assignments in the sample.
         let assignments: Vec<_> = text
             .lines()
             .take(512)
             .filter_map(|line| {
                 let line = line.trim().trim_start_matches('@').trim();
-                let body = line
-                    .get(..4)
-                    .filter(|prefix| prefix.eq_ignore_ascii_case("set "))?;
-                let _ = body;
+                line.get(..4).filter(|p| p.eq_ignore_ascii_case("set "))?;
                 let value = line[4..].trim().trim_matches('"');
                 let (key, val) = value.split_once('=')?;
                 let key = key.trim();
                 if key.len() > 64 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     return None;
                 }
-                if val.len() > 4096 {
-                    return None;
-                }
-                Some((key.to_string(), val.to_string()))
+                if val.len() > 4096 { return None; }
+                Some((key.to_owned(), val.to_owned()))
             })
             .take(32)
             .collect();
-        let mut expanded = text.to_string();
-        for (key, value) in assignments {
-            expanded = expanded.replace(&format!("%{key}%"), &value);
-            expanded = expanded.replace(&format!("!{key}!"), &value);
-        }
-        if expanded != text {
-            out.push(("batch_literal_variables".into(), expanded));
+
+        // Previous implementation called String::replace without a preflight:
+        // %A% -> thousands of bytes, repeated 32 times, could grow exponentially.
+        if !assignments.is_empty() {
+            let mut expanded: Option<String> = None;
+            'assignments: for (key, value) in assignments {
+                for pattern in [format!("%{key}%"), format!("!{key}!")] {
+                    let current = expanded.as_deref().unwrap_or(text);
+                    match replace_bounded(current, &pattern, &value, MAX_LAYER_BYTES) {
+                        Ok(Some(next)) => expanded = Some(next),
+                        Ok(None) => (),
+                        Err(()) => {
+                            out.note("batch_expansion_size_limit");
+                            expanded = None;
+                            break 'assignments;
+                        }
+                    }
+                }
+            }
+            if let Some(expanded) = expanded {
+                out.push("batch_literal_variables", expanded);
+            }
         }
         if text.contains('^') {
-            out.push(("batch_caret".into(), text.replace('^', "")));
+            if text.len() > MAX_LAYER_BYTES {
+                out.note("batch_caret_size_limit");
+            } else {
+                out.push("batch_caret", text.replace('^', ""));
+            }
         }
     }
     out
@@ -424,29 +438,37 @@ pub fn inspect(data: &[u8], report: &mut Report) {
         }
         processed += 1;
         analyze_layer(&layer, report);
+        let derived = derive(&layer.text, is_batch);
+        for reason in derived.reasons {
+            report.mark_incomplete(reason);
+        }
         if layer.depth >= MAX_DEPTH {
+            if !derived.layers.is_empty() {
+                report.mark_incomplete("max_decode_depth");
+            }
             continue;
         }
-
-        for (method, derived) in derive(&layer.text, is_batch) {
-            let bytes = derived.len();
-            if bytes == 0
-                || bytes > MAX_LAYER_BYTES
-                || derived_total.saturating_add(bytes) > MAX_DERIVED_TOTAL
-            {
+        for (method, value) in derived.layers {
+            let bytes = value.len();
+            if derived_total.saturating_add(bytes) > MAX_DERIVED_TOTAL {
+                report.mark_incomplete("total_derived_bytes_limit");
+                continue;
+            }
+            if processed + queue.len() >= MAX_LAYERS {
+                report.mark_incomplete("max_decoded_layers");
                 continue;
             }
             derived_total += bytes;
             queue.push_back(Layer {
-                text: derived,
+                text: value,
                 origin: method,
                 depth: layer.depth + 1,
             });
         }
     }
     report.decoded_layers = processed.saturating_sub(1);
-    if !queue.is_empty() || derived_total >= MAX_DERIVED_TOTAL {
-        report.warning = Some("Deobfuscation budget reached: results may be incomplete".into());
+    if !queue.is_empty() {
+        report.mark_incomplete("max_decoded_layers");
     }
 }
 
@@ -530,5 +552,75 @@ mod tests {
             .write_all(&vec![b'A'; MAX_LAYER_BYTES + 10])
             .unwrap();
         assert!(inflate_bounded(&encoder.finish().unwrap()).is_none());
+    }
+}
+
+
+#[cfg(test)]
+mod resource_limit_tests {
+    use super::*;
+    use crate::model::Report;
+
+    fn inspect_sample(sample: &str, name: &str) -> Report {
+        let mut r = Report::new(name.into(), "script");
+        inspect(sample.as_bytes(), &mut r);
+        r.finish();
+        r
+    }
+
+    #[test]
+    fn repeated_batch_replacement_is_bounded_before_allocation() {
+        let mut data = String::from("set \"A=");
+        data.push_str(&"x".repeat(4096));
+        data.push_str("\"\n");
+        data.push_str(&"%A%".repeat(64));
+        let r = inspect_sample(&data, "suspicious.bat");
+        assert_eq!(r.status, "incomplete");
+        assert_eq!(r.risk, "incomplete");
+        assert!(r.incomplete_reasons.contains(&"batch_expansion_size_limit"));
+    }
+
+    #[test]
+    fn small_batch_variables_still_decode_and_detect() {
+        let r = inspect_sample("set \"X=Add-MpPreference\"\n%X% -ExclusionPath C:\\Temp", "sample.cmd");
+        assert!(r.signals.iter().any(|s| s.code == "defense_evasion"));
+        assert!(r.analysis_complete);
+    }
+
+    #[test]
+    fn large_batch_caret_does_not_allocate_unbounded_derived_copy() {
+        let r = inspect_sample(&format!("^{}", "A".repeat(MAX_LAYER_BYTES + 1)), "sample.cmd");
+        assert_eq!(r.status, "incomplete");
+        assert!(r.incomplete_reasons.contains(&"batch_caret_size_limit"));
+    }
+
+    #[test]
+    fn oversized_compressed_base64_is_not_silently_ignored() {
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&vec![b'A'; MAX_LAYER_BYTES + 1]).unwrap();
+        let payload = STANDARD.encode(encoder.finish().unwrap());
+        let r = inspect_sample(&format!("exec(base64.b64decode('{payload}'))"), "sample.py");
+        assert_eq!(r.status, "incomplete");
+        assert!(r.incomplete_reasons.contains(&"encoded_payload_size_limit"));
+    }
+
+    #[test]
+    fn repeated_obfuscation_layers_hit_cap_with_explicit_warning() {
+        let samples = (0..25).map(|i| {
+            let command = format!("Add-MpPreference -ExclusionPath C:\\Temp{i}");
+            STANDARD.encode(command)
+        }).collect::<Vec<_>>().join(" ");
+        let r = inspect_sample(&samples, "many.py");
+        assert_eq!(r.status, "incomplete");
+        assert!(r.incomplete_reasons.contains(&"max_decoded_layers"));
+        assert!(r.signals.iter().any(|s| s.code == "defense_evasion"));
+    }
+
+    #[test]
+    fn bounded_replace_checks_length_before_allocation() {
+        assert_eq!(replace_bounded("abc", "%X%", "X", 10), Ok(None));
+        assert_eq!(replace_bounded("%X%", "%X%", "ab", 2), Ok(Some("ab".into())));
+        assert_eq!(replace_bounded("%X%", "%X%", "abc", 2), Err(()));
     }
 }

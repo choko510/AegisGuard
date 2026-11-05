@@ -143,6 +143,7 @@ aegisguard events collect --channel Microsoft-Windows-Sysmon/Operational --spool
 - **スプールをフラッシュした後にだけ**カーソル（ブックマーク）を2世代保存で進めます。途中で止まると次回に同じイベントを再読込します（`event_uid` が同じ重複は起こり得ますが、取りこぼしはしません）。
 - ブックマークの記録が消えた（ログが上書きされた）場合や `EventRecordID` が飛んだ場合は、`gaps` に記録して `status=gap` にします。未来のイベントだけに切り替えて黙って続けることはしません。チャネルが無い・権限がない場合は `status=degraded` で、終了コードは非0です。
 - 保存するのは許可リストのフィールドだけです（ProcessGuid・Image・宛先IP/ポート・DNS名・ハッシュ等）。`CommandLine` はSHA-256だけを保存し、ユーザー名や端末名は保存しません。
+- `aegisguard events processes --spool dataventssysmon.jsonl` はスプールからProcessGuid単位のプロセスの生存期間（作成・終了・通信先・DNS・DLLロード数・アクセス先）を組み立てます。PIDだけでは同一視しません。作成イベントを見ていないプロセスは `start_observed=false`、重複・時刻の逆転・同じPIDの同時生存は `anomalies` に出します。**観測されなかったイベント種別（例：Sysmon ID 3/7/22が無効）は `unobserved` に出し、「通信なし」とは扱いません。**
 
 ### 今後の本番機能
 

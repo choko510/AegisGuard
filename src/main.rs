@@ -147,6 +147,11 @@ enum EventsCommand {
         #[arg(long, default_value_t = 100_000)]
         max_events: u64,
     },
+    /// Rebuild Sysmon process lifetimes (keyed by ProcessGuid) from a spool, offline.
+    Processes {
+        #[arg(long, default_value = "data/events/sysmon.jsonl")]
+        spool: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -417,6 +422,22 @@ fn main() -> Result<()> {
                     max_events,
                 },
         } => collect_events(&channel, spool, checkpoint, max_events)?,
+        Commands::Events {
+            command: EventsCommand::Processes { spool },
+        } => {
+            let (events, bad_lines) = events::process::read_spool(&spool)?;
+            let table = events::process::ProcessTable::build(&events);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "events": events.len(),
+                    "bad_lines": bad_lines,
+                    "unobserved": table.unobserved(),
+                    "note": "Unobserved event types mean unknown activity, not absence of activity.",
+                    "table": table,
+                })
+            );
+        }
         Commands::C2 { command } => match command {
             C2Command::Update { cache } => c2::update(&cache)?,
             C2Command::Check { ip, cache } => c2::check(&cache, ip)?,

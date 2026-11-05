@@ -59,7 +59,7 @@ cargo run --release -- c2 status
 - `not_assessed`：対象外、検査失敗、異常なPE構造、サイズ超過など。安全と扱いません。
 - スコアは初期ヒューリスティックスであり感染確率ではありません。コメントや正規の管理スクリプトにも反応し得ます。
 - 独自暗号化、動的に生成されるコード、メモリだけで実行されるペイロード、複雑なJS ASTの復元などには未対応です。
-- PEのAuthenticode署名検証、インポートテーブル解析は未実装です。YARA-Xは任意機能（`--features yara`）で、YARAのモジュール（`pe`等）は使えません。
+- PEは、インポート/エクスポート・証明書テーブル・オーバーレイを上限付きで解析し、WindowsではAuthenticode署名を `WinVerifyTrust`（UIなし、失効確認はキャッシュのみでネットワークに出ない）と署名カタログで検証します（`pe.authenticode.status`：`signed / invalid / unsigned / chain_unknown / revocation_unknown / not_assessed`）。**有効な署名は発行元の証明であって安全の証明ではなく、スコアを下げません。** 署名が検証できない（改ざん・失効）場合は `invalid_signature` を記録します。YARA-Xは任意機能（`--features yara`）で、YARAのモジュール（`pe`等）は使えません。
 - C2フィードが空・古い・未登録であっても、感染していないことを示すわけではありません。
 - C2キャッシュはバージョン2でフィード単位の `last_success_at` と48時間の期限を管理します。**更新に失敗したフィードの時刻は変更しません。**
 - `c2 status` の `feeds[].stale` を参照してください。`c2 check` は期限切れのIPを `matched=true` にせず、`stale_matches_ignored` に区別して表示します。
@@ -186,7 +186,7 @@ aegisguard browser k2f
 - 2026年に公表されたNIKKE PCランチャーの事案（k2f）の痕跡として、`%LOCALAPPDATA%\Google\Chrome\User Data\PlatformExperienceHelper\<16進64桁>\platform_experience_helper.dll` と、`HKCU\Software\Classes\CLSID\{E77CC89B-7401-4C04-8CED-149DB35ADD04}\InprocServer32`（WOW6432Nodeを含む）の参照先を確認します。
 - `PlatformExperienceHelper` フォルダー自体はChromeの正常なデータで、それだけでは報告しません。HKLMの登録は参考情報で、単独の指標にしません。
 - 判定は `correlated_suspicion`（DLLとHKCU登録が同じファイルを指す）／`indicator_present`（片方のみ）／`not_observed`（見つからない。**未感染の証明ではない**）／`not_assessed`（調べられなかった）。
-- DLLは `scan` と同じハンドルベースの読み取りで静的に調べるだけで、読み込み・実行しません。**ファイルやレジストリを削除・変更しません。** 他のユーザーのプロファイル・ハイブとAuthenticode署名は未検査として出力に明記します。
+- DLLは `scan` と同じハンドルベースの読み取りで静的に調べるだけで、読み込み・実行しません。**ファイルやレジストリを削除・変更しません。** DLLのAuthenticode署名の結果も出力します。他のユーザーのプロファイル・ハイブは未検査として出力に明記します。
 
 ### ローカルHTMLレポート（P4-03、読み取り専用）
 
@@ -229,7 +229,7 @@ cargo run --release -p aegis-ui            # Rust 1.95以上が必要（CLIは1.
 
 ### 未実装の機能
 
-未実装：常駐のWindowsサービスとIPC（必要になった場合のみ）、AMSI連携、Authenticode、許諾を確認したドメインIOCフィード、ルールパックの配信、**Windows Firewallへの実際の遮断の適用**（隔離VMでの復旧の実証と明示の承認が前提）、プロセスメモリの検査（別途承認が前提）、常駐GUI。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。
+未実装：常駐のWindowsサービスとIPC（必要になった場合のみ）、AMSI連携、許諾を確認したドメインIOCフィード、ルールパックの配信、**Windows Firewallへの実際の遮断の適用**（隔離VMでの復旧の実証と明示の承認が前提）、プロセスメモリの検査（別途承認が前提）、常駐GUI。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。
 
 ## 脅威フィード
 

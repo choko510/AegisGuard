@@ -8,6 +8,7 @@
 //! caches, and never changes Microsoft Defender, Windows Firewall or other
 //! OS settings.
 pub mod api;
+pub mod authenticode;
 pub mod browser;
 pub mod budget;
 pub mod c2;

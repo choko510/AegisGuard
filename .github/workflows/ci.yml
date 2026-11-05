@@ -22,17 +22,8 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Format (temporary bootstrap)
-        run: cargo fmt --all
-      - name: Capture formatted sources for review
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          for p in sorted(Path("src").glob("*.rs")):
-              print("AEGIS_FORMAT_JSON=" + json.dumps({"path": str(p), "content": p.read_text(encoding="utf-8")}, ensure_ascii=True))
-          PY
+      - name: Format
+        run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests

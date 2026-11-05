@@ -749,8 +749,8 @@ pub fn summarize(expected: &Path, actual: &Path) -> LabResult<Value> {
                     !refs.is_empty() && refs.iter().all(Value::is_string)
                 });
                 if expected.is_none()
-                    || expected.is_some_and(|e| e.outcome != "present")
-                    || !referenced
+                    || expected.is_some_and(|e| e.outcome == "planned")
+                    || (!referenced && expected.is_some_and(|e| e.outcome == "present"))
                 {
                     failed += 1;
                     entries.push(json!({

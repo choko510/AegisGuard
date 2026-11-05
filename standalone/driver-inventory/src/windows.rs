@@ -167,15 +167,20 @@ fn query_config(manager: Handle, name: &str, service: &mut RawService) {
         Ok(count) => service.dependency_count = Some(count),
         Err(_) => service.config_error = Some("unavailable"),
     }
-    // QueryServiceConfig2W's delayed-auto-start flag is optional (not driver loading).
-    let mut delayed = [0u32; 2];
-    let mut required = 0u32;
-    // SAFETY: Exact 8-byte buffer and read-only configuration query.
-    if unsafe { QueryServiceConfig2W(handle, SERVICE_CONFIG_DELAYED_AUTO_START_INFO,
-        delayed.as_mut_ptr().cast::<u8>(), size_of::<[u32; 2]>() as u32,
-        &mut required) } != 0
-    {
-        service.delayed_auto_start = Some(delayed[0] != 0);
+    // Delayed-auto-start applies to automatic Win32 services, not drivers.
+    // Never silently label a failed query as "false"/disabled.
+    if service.start_type == Some(2) && !driver_inventory::is_driver(service.service_type) {
+        let mut delayed = [0u32; 2];
+        let mut required = 0u32;
+        // SAFETY: Exact 8-byte buffer and read-only configuration query.
+        if unsafe { QueryServiceConfig2W(handle, SERVICE_CONFIG_DELAYED_AUTO_START_INFO,
+            delayed.as_mut_ptr().cast::<u8>(), size_of::<[u32; 2]>() as u32,
+            &mut required) } != 0
+        {
+            service.delayed_auto_start = Some(delayed[0] != 0);
+        } else if service.config_error.is_none() {
+            service.config_error = Some(error_code(win_error()));
+        }
     }
 }
 pub fn windows_directory() -> Result<String, &'static str> {

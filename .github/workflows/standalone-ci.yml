@@ -42,11 +42,6 @@ jobs:
           for manifest in standalone/*/Cargo.toml; do
             count=$((count + 1))
             echo "::group::Checking ${manifest}"
-            cargo generate-lockfile --manifest-path "${manifest}"
-            cargo fmt --manifest-path "${manifest}" --all
-            echo 'AEGIS_FORMAT_PATCH_BEGIN'
-            git --no-pager diff --no-ext-diff --no-color --unified=3 -- standalone/
-            echo 'AEGIS_FORMAT_PATCH_END'
             cargo fmt --manifest-path "${manifest}" --all -- --check
             cargo clippy --locked --manifest-path "${manifest}" --all-targets -- -D warnings
             cargo test --locked --manifest-path "${manifest}" --all-targets
@@ -59,16 +54,6 @@ jobs:
             echo "::error::No standalone Cargo packages found"
             exit 1
           fi
-      - name: Upload rustfmt-normalized source for review
-        if: always() && runner.os == 'Linux'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: formatted-standalone-sources
-          path: |
-            standalone/*/src/*.rs
-            standalone/*/tests/*.rs
-            standalone/*/Cargo.lock
-          if-no-files-found: error
       - name: Check PowerShell source syntax (no execution)
         if: runner.os == 'Windows'
         shell: pwsh

@@ -129,13 +129,22 @@ pub fn rule_status(table: &ProcessTable) -> Vec<RuleStatus> {
         status("AG-B001", &[NEED_FILE, NEED_CREATE]),
         status("AG-B002", &[NEED_REG]),
         status("AG-B003", &[NEED_FILE, NEED_REG, NEED_LOAD]),
-        // Reading credential files is only visible through file-access
-        // auditing (P6-04), which is not an input of this offline replay.
-        RuleStatus {
-            rule_id: "AG-B004",
-            rule_version: RULE_VERSION,
-            evaluable: false,
-            missing_sources: vec!["credential_file_read_audit"],
+        // Reading credential files is only visible through Security 4663
+        // object-access auditing that an administrator configured (P6-04).
+        {
+            let audit = table
+                .observed_security_event_ids
+                .contains_key(&super::process::OBJECT_ACCESS);
+            let mut missing_sources = Vec::new();
+            if !audit {
+                missing_sources.push("credential_file_read_audit");
+            }
+            RuleStatus {
+                rule_id: "AG-B004",
+                rule_version: RULE_VERSION,
+                evaluable: audit,
+                missing_sources,
+            }
         },
         // Partially evaluable with any one of the three sources.
         RuleStatus {
@@ -365,6 +374,8 @@ pub fn evaluate(table: &ProcessTable, findings: &mut Vec<Finding>) {
         }
     }
 
+    credential_reads(table, findings);
+
     // AG-B005: the publicly reported k2f traces (path shape and CLSID).
     let k2f_clsid = crate::browser::CLSID;
     let mut by_path: BTreeMap<&str, Evidence> = BTreeMap::new();
@@ -419,6 +430,118 @@ pub fn evaluate(table: &ProcessTable, findings: &mut Vec<Finding>) {
             "review",
             "Matches the publicly reported k2f traces (PlatformExperienceHelper\\<64 hex>\\platform_experience_helper.dll and/or CLSID {E77CC89B-7401-4C04-8CED-149DB35ADD04}); see browser k2f for the current state. A match is not proof of infection",
         ));
+    }
+}
+
+/// Credential stores of browsers (file name, browser image that owns them).
+const CREDENTIAL_FILES: &[&str] = &[
+    "login data",
+    "cookies",
+    "web data",
+    "local state",
+    "key4.db",
+    "logins.json",
+    "cookies.sqlite",
+];
+/// Programs expected to read these files besides the browser itself.
+const EXPECTED_READERS: &[&str] = &[
+    "msmpeng.exe",
+    "mpdefendercoreservice.exe",
+    "searchprotocolhost.exe",
+];
+/// AG-B004: a read followed by contact with a fresh C2 IOC within this window.
+const EXFIL_WINDOW_MS: i64 = 10 * 60 * 1000;
+
+fn is_credential_store(path_key: &str) -> bool {
+    under(path_key, USER_DATA_ROOTS) && CREDENTIAL_FILES.contains(&basename(path_key).as_str())
+}
+
+/// The browser that owns a store, read from its own install location.
+fn owner_browser(path_key: &str, reader: &str) -> bool {
+    let image = basename(reader);
+    let data_dir = match image.as_str() {
+        "chrome.exe" => r"\google\chrome\",
+        "msedge.exe" => r"\microsoft\edge\",
+        "brave.exe" => r"\bravesoftware\",
+        "firefox.exe" => r"\mozilla\firefox\",
+        "vivaldi.exe" => r"\vivaldi\",
+        "opera.exe" => r"\opera software\",
+        _ => return false,
+    };
+    under(&path_key_of(reader), BROWSER_INSTALL_DIRS) && path_key.contains(data_dir)
+}
+
+fn path_key_of(path: &str) -> String {
+    super::process::path_key(path)
+}
+
+/// AG-B004: credential-store reads by programs other than the owning
+/// browser, escalated when the same process then contacted a fresh C2 IOC.
+fn credential_reads(table: &ProcessTable, findings: &mut Vec<Finding>) {
+    for read in &table.file_reads {
+        if !is_credential_store(&read.path_key) {
+            continue;
+        }
+        let reader = read.process_name.clone().unwrap_or_default();
+        if owner_browser(&read.path_key, &reader)
+            || EXPECTED_READERS.contains(&basename(&reader).as_str())
+        {
+            continue;
+        }
+        // Link to a Sysmon process by image and PID alive at that time.
+        let process = table.processes.values().find(|p| {
+            p.pid == read.pid
+                && p.image.as_deref().map(path_key_of) == Some(path_key_of(&reader))
+                && match (p.started_at_unix_ms, read.at_unix_ms) {
+                    (Some(s), Some(t)) => s <= t && p.ended_at_unix_ms.is_none_or(|e| t <= e),
+                    _ => false,
+                }
+        });
+        let contact = process.and_then(|p| {
+            p.contacts
+                .iter()
+                .find(|c| match (c.at_unix_ms, read.at_unix_ms) {
+                    (Some(c_at), Some(t)) => c_at >= t && c_at - t <= EXFIL_WINDOW_MS,
+                    _ => false,
+                })
+        });
+        let mut refs = vec![read.event_uid.clone()];
+        let mut times = vec![read.at_unix_ms];
+        if let Some(c) = contact {
+            refs.push(c.event_uid.clone());
+            times.push(c.at_unix_ms);
+        }
+        let process_key = process.map_or_else(
+            || format!("pid:{}", read.pid.unwrap_or(0)),
+            |p| p.process_guid.clone(),
+        );
+        let mut f = finding(
+            "AG-B004",
+            &process_key,
+            Evidence {
+                refs,
+                times,
+                ..Evidence::default()
+            },
+            if contact.is_some() { "medium" } else { "low" },
+            if process.is_none() {
+                vec!["sysmon_process_create"]
+            } else {
+                vec![]
+            },
+            if contact.is_some() {
+                "review"
+            } else {
+                "observed"
+            },
+            if contact.is_some() {
+                "A program other than the browser read a browser credential store and then connected out; check what it sent"
+            } else {
+                "A program other than the browser read a browser credential store (backup and security tools do this too)"
+            },
+        );
+        f.suppressed_reason = None;
+        findings.push(f);
     }
 }
 
@@ -489,6 +612,149 @@ mod tests {
             .filter(|f| f.rule_id.starts_with("AG-B"))
             .map(|f| (f.rule_id, f.verdict, f.confidence))
             .collect()
+    }
+
+    // --- P6-04: credential-store reads from Security 4663 audit events ---
+
+    fn security_read(
+        record: u64,
+        time: &str,
+        object: &str,
+        process: &str,
+        pid: &str,
+        mask: &str,
+    ) -> EventEnvelope {
+        let xml = format!(
+            "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>\
+             <Provider Name='Microsoft-Windows-Security-Auditing'/><EventID>4663</EventID>\
+             <TimeCreated SystemTime='{time}'/><EventRecordID>{record}</EventRecordID>\
+             <Channel>Security</Channel></System><EventData>\
+             <Data Name='SubjectUserName'>someone</Data>\
+             <Data Name='ObjectType'>File</Data><Data Name='ObjectName'>{object}</Data>\
+             <Data Name='AccessMask'>{mask}</Data><Data Name='ProcessId'>{pid}</Data>\
+             <Data Name='ProcessName'>{process}</Data></EventData></Event>"
+        );
+        super::super::parse_event_xml(&xml, "Security", 0).unwrap()
+    }
+
+    const LOGIN_DATA: &str = r"C:\Users\u\AppData\Local\Google\Chrome\User Data\Default\Login Data";
+    const STEALER: &str = r"C:\Users\u\AppData\Local\Temp\x.exe";
+
+    fn b004(events: &[EventEnvelope]) -> Vec<(&'static str, &'static str)> {
+        let table = ProcessTable::build(events);
+        correlate(&table, &none)
+            .findings
+            .into_iter()
+            .filter(|f| f.rule_id == "AG-B004")
+            .map(|f| (f.verdict, f.confidence))
+            .collect()
+    }
+
+    #[test]
+    fn credential_read_by_other_program_then_connect_is_review() {
+        let events = vec![
+            create(
+                1,
+                "2026-11-05T10:00:00Z",
+                "{S}",
+                "4660",
+                STEALER,
+                "explorer.exe",
+            ),
+            security_read(
+                2,
+                "2026-11-05T10:00:05Z",
+                LOGIN_DATA,
+                STEALER,
+                "0x1234",
+                "0x1",
+            ),
+            ev(
+                super::super::process::NETWORK_CONNECT,
+                3,
+                "2026-11-05T10:01:00Z",
+                &[
+                    ("ProcessGuid", "{S}"),
+                    ("DestinationIp", "198.51.100.9"),
+                    ("DestinationPort", "443"),
+                ],
+            ),
+        ];
+        assert_eq!(b004(&events), vec![("review", "medium")]);
+        // The read alone (no outbound contact) is only observed.
+        assert_eq!(b004(&events[..2]), vec![("observed", "low")]);
+    }
+
+    #[test]
+    fn owner_browser_defender_writes_and_other_files_are_not_findings() {
+        let chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe";
+        let events = vec![
+            security_read(1, "2026-11-05T10:00:00Z", LOGIN_DATA, chrome, "0x10", "0x1"),
+            security_read(
+                2,
+                "2026-11-05T10:00:01Z",
+                LOGIN_DATA,
+                r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18\MsMpEng.exe",
+                "0x11",
+                "0x1",
+            ),
+            // Write-only access is not a read.
+            security_read(
+                3,
+                "2026-11-05T10:00:02Z",
+                LOGIN_DATA,
+                STEALER,
+                "0x12",
+                "0x2",
+            ),
+            // Not a credential store.
+            security_read(
+                4,
+                "2026-11-05T10:00:03Z",
+                r"C:\Users\u\AppData\Local\Google\Chrome\User Data\Default\Preferences",
+                STEALER,
+                "0x13",
+                "0x1",
+            ),
+            // Chrome reading Edge's store is not its own store.
+        ];
+        assert!(b004(&events).is_empty());
+        let cross = vec![security_read(
+            5,
+            "2026-11-05T10:00:04Z",
+            r"C:\Users\u\AppData\Local\Microsoft\Edge\User Data\Default\Login Data",
+            chrome,
+            "0x10",
+            "0x1",
+        )];
+        assert_eq!(b004(&cross), vec![("observed", "low")]);
+    }
+
+    #[test]
+    fn without_audit_events_the_rule_is_not_evaluable_and_with_them_it_is() {
+        let table = ProcessTable::build(&[]);
+        let r = correlate(&table, &none);
+        let s = r.rules.iter().find(|r| r.rule_id == "AG-B004").unwrap();
+        assert!(!s.evaluable);
+        assert_eq!(s.missing_sources, vec!["credential_file_read_audit"]);
+        let table = ProcessTable::build(&[security_read(
+            1,
+            "2026-11-05T10:00:00Z",
+            r"C:\x.txt",
+            STEALER,
+            "0x1",
+            "0x1",
+        )]);
+        let r = correlate(&table, &none);
+        assert!(
+            r.rules
+                .iter()
+                .find(|r| r.rule_id == "AG-B004")
+                .unwrap()
+                .evaluable
+        );
+        // User names are not kept.
+        assert!(!serde_json::to_string(&table).unwrap().contains("someone"));
     }
 
     fn hijack_chain() -> Vec<EventEnvelope> {

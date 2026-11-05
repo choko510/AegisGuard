@@ -69,6 +69,11 @@ const KEPT_FIELDS: &[&str] = &[
     "New Value",
     // Sysmon 14 (registry key/value rename): the new key path.
     "NewName",
+    // Security 4663 (object access audit): which file, how, by which program.
+    "ObjectType",
+    "ObjectName",
+    "AccessMask",
+    "ProcessName",
 ];
 /// Fields kept only as a SHA-256 digest (`<name>_sha256`).
 const HASHED_FIELDS: &[&str] = &["CommandLine", "ParentCommandLine"];

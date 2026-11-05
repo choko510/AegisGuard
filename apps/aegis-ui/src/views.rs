@@ -374,6 +374,50 @@ pub fn browser_coverage(data: &Dataset, browser: &str, now: u64) -> Vec<StatusRo
     vec![k2f, correlation, credentials, specific]
 }
 
+/// AG-B004 (P6-04): reads of browser credential stores, from Security 4663
+/// object-access audit events an administrator configured.
+fn credential_read_row(data: &Dataset) -> StatusRow {
+    let name = "認証情報ファイルの読み取り";
+    let audit_note = "Windowsのセキュリティ監査（イベント4663、対象ファイルへのSACL）を管理者が設定した場合だけ見えます。AegisGuardは監査ポリシーやSACLを変更しません。FIMでは読み取りは見えません。";
+    let Some(doc) = data.latest(DocumentKind::Correlation) else {
+        return row(
+            name,
+            Status::NoData,
+            format!("`events correlate`（Securityログを含む）の結果がありません。{audit_note}"),
+        );
+    };
+    let evaluable = doc.value["correlation"]["rules"]
+        .as_array()
+        .and_then(|r| r.iter().find(|r| r["rule_id"] == "AG-B004"))
+        .is_some_and(|r| r["evaluable"] == Value::Bool(true));
+    if !evaluable {
+        return row(
+            name,
+            Status::Incomplete,
+            format!("監査イベント（4663）が観測されていないため評価できません。{audit_note}"),
+        );
+    }
+    let findings: Vec<&Value> = doc.value["correlation"]["findings"]
+        .as_array()
+        .map(|f| f.iter().filter(|f| f["rule_id"] == "AG-B004").collect())
+        .unwrap_or_default();
+    let review = findings.iter().filter(|f| f["verdict"] == "review").count();
+    row(
+        name,
+        if review > 0 {
+            Status::Review
+        } else if !findings.is_empty() {
+            Status::Observed
+        } else {
+            Status::NothingFound
+        },
+        format!(
+            "ブラウザー以外のプログラムによる読み取り {} 件（その後の外部接続あり {review} 件）。監査の対象範囲は設定次第で、範囲外のファイルは見えません。",
+            findings.len()
+        ),
+    )
+}
+
 pub fn browser_rows(data: &Dataset, now: u64) -> Vec<StatusRow> {
     let k2f = match data.latest(DocumentKind::BrowserCheck) {
         None => row(
@@ -460,11 +504,7 @@ pub fn browser_rows(data: &Dataset, now: u64) -> Vec<StatusRow> {
     vec![
         k2f,
         rules,
-        row(
-            "認証情報ファイルの読み取り",
-            Status::NotAvailable,
-            "読み取り監査（P6-04）は未実装です。FIMでは読み取りは見えません。",
-        ),
+        credential_read_row(data),
         row(
             "Edge / Brave / Firefox 固有の確認",
             Status::NotAvailable,

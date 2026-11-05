@@ -120,6 +120,25 @@ pub struct FileCreate {
     pub event_uid: String,
 }
 
+pub const SECURITY_PROVIDER: &str = "Microsoft-Windows-Security-Auditing";
+/// Security 4663: an attempt was made to access an object (needs a SACL).
+pub const OBJECT_ACCESS: u32 = 4663;
+/// ReadData / ListDirectory bit of an access mask.
+const READ_DATA: u32 = 0x1;
+
+/// Security 4663 read of a file (from an audit SACL the administrator set).
+/// Only metadata: the file is never opened by AegisGuard.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FileRead {
+    /// Lower-case object path.
+    pub path_key: String,
+    pub process_name: Option<String>,
+    pub pid: Option<u32>,
+    pub access_mask: u32,
+    pub at_unix_ms: Option<i64>,
+    pub event_uid: String,
+}
+
 /// Microsoft Defender detection (Operational 1116/1117), keyed by file path.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DefenderDetection {
@@ -147,6 +166,12 @@ pub struct ProcessTable {
     pub skipped_without_guid: u64,
     pub anomalies: Vec<Anomaly>,
     pub defender_detections: Vec<DefenderDetection>,
+    /// Security 4663 file reads (capped; the rest only counted).
+    pub file_reads: Vec<FileRead>,
+    pub omitted_file_reads: u64,
+    /// Security event ids seen (4663 means object-access auditing is on
+    /// for at least some objects; its exact scope is unknown).
+    pub observed_security_event_ids: BTreeMap<u32, u64>,
     pub observed_defender_event_ids: BTreeMap<u32, u64>,
     #[serde(skip)]
     seen: BTreeSet<String>,
@@ -170,6 +195,7 @@ impl ProcessTable {
             table.ingest(e);
         }
         table.ingest_defender(events);
+        table.ingest_security(events);
         table.check_pid_overlaps();
         table
     }
@@ -336,6 +362,47 @@ impl ProcessTable {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn ingest_security(&mut self, events: &[EventEnvelope]) {
+        const MAX_FILE_READS: usize = 4096;
+        for e in events
+            .iter()
+            .filter(|e| e.source == SECURITY_PROVIDER && e.event_id == OBJECT_ACCESS)
+        {
+            if !self.seen.insert(e.event_uid.clone()) {
+                self.duplicates += 1;
+                continue;
+            }
+            *self
+                .observed_security_event_ids
+                .entry(e.event_id)
+                .or_default() += 1;
+            let mask = e
+                .field_owned("AccessMask")
+                .and_then(|m| u32::from_str_radix(m.trim_start_matches("0x"), 16).ok())
+                .unwrap_or(0);
+            let (Some(object), true) = (e.field_owned("ObjectName"), mask & READ_DATA != 0) else {
+                continue;
+            };
+            if e.field_owned("ObjectType").is_some_and(|t| t != "File") {
+                continue;
+            }
+            if self.file_reads.len() >= MAX_FILE_READS {
+                self.omitted_file_reads += 1;
+                continue;
+            }
+            self.file_reads.push(FileRead {
+                path_key: path_key(&object),
+                process_name: e.field_owned("ProcessName"),
+                pid: e
+                    .field_owned("ProcessId")
+                    .and_then(|p| u32::from_str_radix(p.trim_start_matches("0x"), 16).ok()),
+                access_mask: mask,
+                at_unix_ms: e.occurred_at_unix_ms,
+                event_uid: e.event_uid.clone(),
+            });
         }
     }
 

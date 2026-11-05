@@ -51,6 +51,7 @@ pub struct Case {
     pub case_id: String,
     pub events: Artifact,
     pub xml: Vec<Artifact>,
+    pub extra: Vec<Artifact>,
     pub expected: Vec<Expectation>,
     pub missing_sources: Vec<String>,
     pub note: String,
@@ -415,8 +416,25 @@ pub fn generate(out: &Path, seed: u64, profile: &str) -> LabResult<Value> {
         }
         let rel = format!("{name}/events.jsonl");
         new_file(&out.join(&rel), &lines)?;
+        let mut extra = Vec::new();
+        let marker = format!("AegisGuard synthetic fixture: {name} seed={seed}\nNothing in this directory should be executed.\n");
+        let marker_rel = format!("{name}/inert.txt");
+        new_file(&out.join(&marker_rel), marker.as_bytes())?;
+        extra.push(record(marker_rel, marker.as_bytes()));
+        if name == "stale-ioc" {
+            let snapshot = serde_json::to_vec_pretty(&json!({
+                "schema_version":1,
+                "source":"offline_synthetic_only",
+                "indicator":"192.0.2.42",
+                "expires_at_unix_ms":BASE_MS - 86_400_000,
+                "compatible_with_aegisguard_c2_cache":false
+            })).map_err(|_| "cannot encode synthetic IOC")?;
+            let ioc_rel = format!("{name}/expired-ioc.json");
+            new_file(&out.join(&ioc_rel), &snapshot)?;
+            extra.push(record(ioc_rel, &snapshot));
+        }
         cases.push(Case {
-            case_id: name.into(), events: record(rel, &lines), xml,
+            case_id: name.into(), events: record(rel, &lines), xml, extra,
             expected, missing_sources, note,
         });
         count += events.len();
@@ -485,6 +503,7 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
         if started.elapsed() > LIMIT { return Err("verification time budget exceeded".into()); }
         let mut all = case.xml.clone();
         all.push(case.events.clone());
+        all.extend(case.extra.clone());
         let mut known = BTreeSet::new();
         for a in &all {
             if !known.insert(a.path.as_str()) { errors.push("duplicate artifact path".into()); continue; }

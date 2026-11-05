@@ -28,6 +28,9 @@ fn classify(path: &Path) -> Option<&'static str> {
 pub struct Engines<'a> {
     #[cfg(feature = "yara")]
     pub yara: Option<&'a crate::yara::RuleSet>,
+    /// Reuse YARA results of unchanged files with the same rule set (P5-05).
+    #[cfg(feature = "yara")]
+    pub yara_cache: Option<&'a std::cell::RefCell<crate::result_cache::ResultCache>>,
     #[cfg(not(feature = "yara"))]
     pub _none: std::marker::PhantomData<&'a ()>,
 }
@@ -183,10 +186,25 @@ pub fn scan_file(path: &Path, time_limit: Duration, engines: Engines) -> Report 
     #[cfg(not(feature = "yara"))]
     let _ = engines;
     #[cfg(feature = "yara")]
-    let mut yara = engines.yara.map(crate::yara::Run::new);
+    let cached = match (engines.yara, engines.yara_cache, report.sha256.as_deref()) {
+        (Some(rules), Some(cache), Some(sha)) => cache.borrow_mut().get(sha, &rules.sha256),
+        _ => None,
+    };
+    #[cfg(feature = "yara")]
+    let mut yara = if cached.is_some() {
+        None
+    } else {
+        engines.yara.map(crate::yara::Run::new)
+    };
     #[cfg(feature = "yara")]
     if let Some(run) = yara.as_mut() {
-        run.scan(&mut report, "raw", &data, &budget);
+        // Comment ranges are only meaningful when the raw bytes are the text
+        // itself (UTF-8); other encodings are scanned without them.
+        let spans = (kind != "pe")
+            .then(|| std::str::from_utf8(&data).ok())
+            .flatten()
+            .and_then(|text| script::comment_spans(text, &path.display().to_string()));
+        run.scan_with_comments(&mut report, "raw", &data, &budget, spans.as_deref());
     }
     if kind == "pe" {
         pe::inspect(&data, &mut report, &budget);
@@ -215,8 +233,41 @@ pub fn scan_file(path: &Path, time_limit: Duration, engines: Engines) -> Report 
         });
     }
     #[cfg(feature = "yara")]
-    if let Some(run) = yara {
-        report.yara = Some(run.finish());
+    if let Some(summary) = cached {
+        // Same file bytes, rule set and engine: replay the stored evidence.
+        report.analyzer("yara_cache");
+        for m in &summary.matches {
+            let id = if m.rule_id.is_empty() {
+                &m.rule
+            } else {
+                &m.rule_id
+            };
+            if m.in_comment_only {
+                report.add(
+                    "yara_rule_match_in_comment",
+                    5,
+                    format!("yara:{id}@{}", m.layer),
+                    "A YARA rule matched only text inside comments, which is not executed",
+                );
+            } else {
+                report.add(
+                    "yara_rule_match",
+                    m.severity,
+                    format!("yara:{id}@{}", m.layer),
+                    "A YARA rule matched; see yara.matches for evidence",
+                );
+            }
+        }
+        report.yara = Some(summary);
+    } else if let Some(run) = yara {
+        let summary = run.finish();
+        // Only complete analyses are cached; a timeout is never replayed.
+        if report.analysis_complete {
+            if let (Some(cache), Some(sha)) = (engines.yara_cache, report.sha256.as_deref()) {
+                cache.borrow_mut().insert(sha, &summary);
+            }
+        }
+        report.yara = Some(summary);
     }
     report.finish();
     report

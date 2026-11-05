@@ -22,6 +22,25 @@ const ALLOWED_IMPORTS: &[&str] = &[];
 /// Metadata every rule must declare so a match can be traced to its source.
 const REQUIRED_META: &[&str] = &["id", "version", "severity", "origin"];
 
+/// Identity of everything that decides a YARA result besides the file and
+/// the rule set: the engine version and the built-in deobfuscation that
+/// produces the decoded layers.
+pub fn engine_identity() -> String {
+    format!(
+        "yara-x {} / {} / adapter {}",
+        YARA_X_VERSION,
+        crate::model::BUILTIN_RULESET,
+        ADAPTER_VERSION
+    )
+}
+
+/// Bump when the adapter changes how matches become evidence (2: comment-only
+/// matches are flagged).
+pub const ADAPTER_VERSION: u32 = 2;
+
+/// Version of the yara-x crate this build links (kept in step with Cargo.toml).
+pub const YARA_X_VERSION: &str = "1.22.1";
+
 pub struct RuleSet {
     rules: yara_x::Rules,
     pub sha256: String,
@@ -222,6 +241,7 @@ pub fn scan(
                 .min(100),
             layer: layer.to_owned(),
             layer_sha256: layer_sha256.clone(),
+            in_comment_only: false,
             offsets,
             omitted_offsets: omitted,
         });
@@ -251,6 +271,20 @@ impl<'a> Run<'a> {
     /// Scan one layer. A spent budget, timeout or engine error marks the report
     /// incomplete; matches become `yara_rule_match` signals plus evidence entries.
     pub fn scan(&mut self, report: &mut Report, layer: &str, data: &[u8], budget: &Budget) {
+        self.scan_with_comments(report, layer, data, budget, None);
+    }
+
+    /// Like [`Run::scan`]; `comments` are byte ranges of comments in `data`.
+    /// A match whose recorded offsets all fall inside comments is kept as
+    /// evidence but flagged `in_comment_only` and scored as weak.
+    pub fn scan_with_comments(
+        &mut self,
+        report: &mut Report,
+        layer: &str,
+        data: &[u8],
+        budget: &Budget,
+        comments: Option<&[(usize, usize)]>,
+    ) {
         if let Some(reason) = budget.exceeded() {
             report.mark_incomplete(reason);
             return;
@@ -262,18 +296,34 @@ impl<'a> Run<'a> {
         match scan(self.rules, layer, data, timeout) {
             Ok(found) => {
                 self.layers += 1;
-                for m in found {
+                for mut m in found {
                     let id = if m.rule_id.is_empty() {
-                        &m.rule
+                        m.rule.clone()
                     } else {
-                        &m.rule_id
+                        m.rule_id.clone()
                     };
-                    report.add(
-                        "yara_rule_match",
-                        m.severity,
-                        format!("yara:{id}@{layer}"),
-                        "A YARA rule matched; see yara.matches for evidence",
-                    );
+                    m.in_comment_only = comments.is_some_and(|spans| {
+                        m.omitted_offsets == 0
+                            && !m.offsets.is_empty()
+                            && m.offsets
+                                .iter()
+                                .all(|&(o, l)| spans.iter().any(|&(s, e)| o >= s && o + l <= e))
+                    });
+                    if m.in_comment_only {
+                        report.add(
+                            "yara_rule_match_in_comment",
+                            5,
+                            format!("yara:{id}@{layer}"),
+                            "A YARA rule matched only text inside comments, which is not executed",
+                        );
+                    } else {
+                        report.add(
+                            "yara_rule_match",
+                            m.severity,
+                            format!("yara:{id}@{layer}"),
+                            "A YARA rule matched; see yara.matches for evidence",
+                        );
+                    }
                     self.matches.push(m);
                 }
             }

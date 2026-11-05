@@ -372,6 +372,58 @@ fn yara_rules_add_evidence_without_leaking_content() {
     assert!(!run.stdout.contains("Login Data") && !run.stdout.contains("collector.example"));
 }
 
+/// P5-05: a second run reuses cached YARA results with identical evidence.
+/// (Invalidation on rule-set/engine change is covered by result_cache unit tests.)
+#[cfg(feature = "yara")]
+#[test]
+fn yara_cache_replays_identical_evidence_and_invalidates_on_rule_change() {
+    let dir = temp_dir("yara-cache");
+    let cache = dir.join("yara-cache.json");
+    let cache_arg = cache.to_str().unwrap();
+    let strip = |run: &Run| -> Vec<Value> {
+        run.reports
+            .iter()
+            .map(|r| {
+                let mut r = normalize(r.clone());
+                if let Some(a) = r["coverage"]["analyzers"].as_array_mut() {
+                    a.retain(|x| x != "yara_cache");
+                }
+                // Signal order is not meaningful; replayed YARA signals are
+                // appended after the static ones.
+                if let Some(sig) = r["signals"].as_array_mut() {
+                    sig.sort_by_key(|x| x.to_string());
+                }
+                r
+            })
+            .collect()
+    };
+    let first = scan(&[
+        FIXTURES,
+        "--yara-rules",
+        "rules/aegisguard",
+        "--yara-cache",
+        cache_arg,
+    ]);
+    assert!(first.stderr.contains("0 hits"), "{}", first.stderr);
+    let second = scan(&[
+        FIXTURES,
+        "--yara-rules",
+        "rules/aegisguard",
+        "--yara-cache",
+        cache_arg,
+    ]);
+    assert!(
+        !second.stderr.contains(" 0 hits") && second.stderr.contains("hits"),
+        "{}",
+        second.stderr
+    );
+    assert_eq!(strip(&first), strip(&second));
+    // Evidence came from the cache the second time.
+    assert!(second.reports.iter().any(|r| r["coverage"]["analyzers"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(|x| x == "yara_cache"))));
+}
+
 #[cfg(not(feature = "yara"))]
 #[test]
 fn yara_request_without_the_feature_fails_closed() {

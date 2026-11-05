@@ -10,6 +10,7 @@
 pub mod api;
 pub mod authenticode;
 pub mod browser;
+pub mod browser_audit;
 pub mod budget;
 pub mod c2;
 pub mod defender;

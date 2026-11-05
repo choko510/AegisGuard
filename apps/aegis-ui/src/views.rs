@@ -336,6 +336,75 @@ pub const BROWSERS: [&str; 4] = [
 
 /// Per-browser coverage: which checks apply, their current result and what
 /// they need. Checks that do not exist for a browser say so explicitly.
+/// P6-05: per-browser state from `browser audit`.
+fn browser_specific_row(data: &Dataset, browser: &str) -> StatusRow {
+    let name = "インストール状態・強制拡張・COM登録";
+    let Some(doc) = data.latest(DocumentKind::BrowserAudit) else {
+        return row(
+            name,
+            Status::NoData,
+            "`aegisguard browser audit > browsers.json` の結果を読み込むと表示します。",
+        );
+    };
+    let Some(b) = doc.value["browsers"]
+        .as_array()
+        .and_then(|a| a.iter().find(|b| b["name"] == browser))
+    else {
+        return row(
+            name,
+            Status::NotAvailable,
+            "このブラウザーは監査の対象外です。",
+        );
+    };
+    let com: Vec<&Value> = doc.value["per_user_com_servers"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|s| s["browser_user_data"] == browser)
+                .collect()
+        })
+        .unwrap_or_default();
+    let forced = b["forced_extensions_hkcu"].as_u64().unwrap_or(0)
+        + b["forced_extensions_hklm"].as_u64().unwrap_or(0);
+    let status = if !com.is_empty() {
+        Status::Review
+    } else if b["verdict"] == "observed" {
+        Status::Observed
+    } else if b["verdict"] == "not_assessed" {
+        Status::Incomplete
+    } else {
+        Status::NothingFound
+    };
+    let installed = if b["installed"] == Value::Bool(true) {
+        "インストール済み"
+    } else {
+        "インストールなし"
+    };
+    let data_dir = if b["user_data_present"] == Value::Bool(true) {
+        "ユーザーデータあり"
+    } else {
+        "ユーザーデータなし"
+    };
+    let mut detail = format!("{installed}・{data_dir}。ポリシーによる強制拡張 {forced} 件");
+    if b["enterprise_policies_file"] == Value::Bool(true) {
+        detail.push_str("、policies.json あり");
+    }
+    detail.push('。');
+    if !com.is_empty() {
+        detail.push_str(&format!(
+            "このブラウザーのユーザーデータ内のDLLを指すHKCUのCOM登録が {} 件あります（DLL乗っ取りの型）。",
+            com.len()
+        ));
+    }
+    if let Some(notes) = b["notes"].as_array() {
+        for n in notes.iter().filter_map(Value::as_str) {
+            detail.push_str(n);
+            detail.push('。');
+        }
+    }
+    row(name, status, detail)
+}
+
 pub fn browser_coverage(data: &Dataset, browser: &str, now: u64) -> Vec<StatusRow> {
     let shared = browser_rows(data, now);
     let k2f = if browser == "Google Chrome" {
@@ -363,14 +432,7 @@ pub fn browser_coverage(data: &Dataset, browser: &str, now: u64) -> Vec<StatusRo
         let r = &shared[2];
         row("認証情報ファイルの読み取り", r.status, r.detail.clone())
     };
-    let specific = {
-        let r = &shared[3];
-        row(
-            "ブラウザー固有の設定・拡張の確認",
-            r.status,
-            r.detail.clone(),
-        )
-    };
+    let specific = browser_specific_row(data, browser);
     vec![k2f, correlation, credentials, specific]
 }
 
@@ -506,9 +568,13 @@ pub fn browser_rows(data: &Dataset, now: u64) -> Vec<StatusRow> {
         rules,
         credential_read_row(data),
         row(
-            "Edge / Brave / Firefox 固有の確認",
-            Status::NotAvailable,
-            "ブラウザー別の確認（P6-05）は未実装です。",
+            "ブラウザー別の監査",
+            if data.latest(DocumentKind::BrowserAudit).is_some() {
+                Status::Observed
+            } else {
+                Status::NoData
+            },
+            "`aegisguard browser audit` の結果をブラウザーごとに表示します。",
         ),
     ]
 }

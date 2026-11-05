@@ -129,7 +129,7 @@ fn rules() -> &'static Vec<Rule> {
                 "windows_home_path",
                 "personal_path",
                 "medium",
-                r#"(?i)\b[A-Z]:\\Users\\([^\\/\s"']{2,})"#,
+                r#"(?i)\b[A-Z]:\\Users\\([^\\/"'\r\n]{2,64})(?:\\|$|\s|["'])"#,
                 true,
             ),
             (
@@ -164,7 +164,26 @@ fn rules() -> &'static Vec<Rule> {
 }
 
 fn is_masked(text: &str) -> bool {
-    let t = text.trim().trim_matches(|c| c == '"' || c == '\'' || c == ' ');
+    let mut t = text.trim().trim_matches(|c| c == '"' || c == '\'' || c == ' ');
+    // Masked header values commonly retain a "Bearer " or "sid=" prefix.
+    // Limit peeling to three levels to avoid adversarial recursion.
+    for _ in 0..3 {
+        if t.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("bearer ")) {
+            t = &t[7..];
+        } else if let Some((name, value)) = t.split_once('=') {
+            if !name.is_empty()
+                && name.len() <= 64
+                && !name.contains(char::is_whitespace)
+                && !value.is_empty()
+            {
+                t = value;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
     let lower = t.to_ascii_lowercase();
     t.is_empty()
         || matches!(
@@ -245,8 +264,9 @@ fn sensitive_field(key: &str) -> Option<(&'static str, &'static str, &'static st
 fn safe_account(account: &str) -> bool {
     matches!(
         account.to_ascii_lowercase().as_str(),
-        "public" | "default" | "defaultuser0" | "system" | "shared"
-            | "allusers" | "administrator" | "username" | "yourname" | "user"
+        "public" | "default" | "default user" | "defaultuser0" | "system"
+            | "shared" | "allusers" | "all users" | "administrator"
+            | "username" | "yourname" | "user"
     )
 }
 
@@ -684,6 +704,16 @@ mod tests {
         );
         let clean_result = audit_reader(clean.as_bytes(), Mode::Jsonl);
         assert_eq!(exit_code(&clean_result), 0);
+        let header_masks = audit_reader(
+            br#"{"Authorization":"Bearer [REDACTED]","Cookie":"sid=***"}"#,
+            Mode::Jsonl,
+        );
+        assert_eq!(exit_code(&header_masks), 0);
+        let personal = audit_reader(
+            r#"{"path":"C:\\Users\\an example user\\Documents\\notes.txt"}"#.as_bytes(),
+            Mode::Jsonl,
+        );
+        assert_eq!(exit_code(&personal), 2);
         let wide = audit_reader("ｔｏｋｅｎ＝syntheticABCDEFG12345\n".as_bytes(), Mode::Log);
         assert_eq!(exit_code(&wide), 2);
     }

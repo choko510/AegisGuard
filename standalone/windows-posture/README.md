@@ -34,7 +34,7 @@ Secure Boot の `Confirm-SecureBootUEFI` は管理者が必要です。TPMの `W
     {"id":"tpm_2_0","availability":"supported","state":"enabled","source":"Win32_Tpm.SpecVersion;IsReady","checked_at":1793880000000,"warnings":[]},
     {"id":"vbs","availability":"supported","state":"enabled","source":"Win32_DeviceGuard.VirtualizationBasedSecurityStatus","checked_at":1793880000000,"warnings":[]},
     {"id":"hvci","availability":"supported","state":"enabled","source":"Win32_DeviceGuard.SecurityServicesRunning","checked_at":1793880000000,"warnings":[]},
-    {"id":"bitlocker_os_volume","availability":"supported","state":"enabled","source":"Win32_EncryptableVolume.ProtectionStatus;ConversionStatus","checked_at":1793880000000,"warnings":[]}
+    {"id":"bitlocker_os_volume","availability":"supported","state":"enabled","source":"Win32_EncryptableVolume.GetProtectionStatus;GetConversionStatus","checked_at":1793880000000,"warnings":[]}
   ],
   "warnings": [],
   "coverage": {"expected":5,"assessed":5,"unknown":0,"permission_denied":0}
@@ -48,8 +48,9 @@ Secure Boot の `Confirm-SecureBootUEFI` は管理者が必要です。TPMの `W
 
 ## セキュリティ・制約
 
+- PowerShell実行パスは `GetSystemDirectoryW`（kernel32）から取得したディレクトリに固定の相対部分を連結し、`SystemRoot`・`PATH`・カレントディレクトリ・fixture入力を使用しません。Windows 11 x64を対象とし、WOW64からの起動差は実機未確認です。
 - OS照会は組み込みの固定PowerShellスクリプトのみ。入力したfixtureをコマンドに挿入しません。PowerShell 4プローブは各10秒の独立タイムアウト、標準出力は各8KiB以内、失敗時はunknown/permission_denied（最大約40秒）。
-- BitLockerは `Win32_EncryptableVolume` の `VolumeType=0`（OSボリューム）について `ProtectionStatus` と `ConversionStatus` の**プロパティだけ**を照会します。回復パスワード、キー保護方法、ID、マウントパス、暗号鍵、TPM OwnerAuthは要求・保存・表示しません。0件/複数件/矛盾/部分暗号化は保護済みと判定しません。
+- BitLockerは `Win32_EncryptableVolume` の `VolumeType=0`（OSボリューム）について、読み取り専用の `GetProtectionStatus` と `GetConversionStatus`（`PrecisionFactor=0`）を実行します。両方の `ReturnValue=0` と所定の戻り値が確認できない場合、**古いWMIプロパティにはフォールバックせず** `unknown` / `permission_denied` として扱います。回復パスワード、キー保護方法、ID、マウントパス、暗号鍵、TPM OwnerAuthは要求・保存・表示しません。0件/複数件/矛盾/部分暗号化は保護済みと判定しません。
 - `Win32_DeviceGuard` の VBS=1（構成済みだが非稼働）はenabled扱いしません。`SecurityServicesRunning`に2が無ければHVCIは稼働中とみなしません。設定済みで非稼働なら警告します。
 - TPM 2.0の判別には `Win32_Tpm.SpecVersion`、準備状態には管理者専用の読み取りメソッド `IsReady` を使います。生のバージョン文字列や認証情報は出力しません。
 - fixtureは最大64KiB、1ファイルのみ、最終コンポーネントのシンボリックリンク拒否、固定フィールド以外を拒否、サービス配列は最大16件。入力そのものはログに出しません。親ディレクトリのリンク入れ替え等の完全な競合対策は未実装です。

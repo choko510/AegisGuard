@@ -122,7 +122,14 @@ pub fn inspect_records(input: &[u8], include_wmi: bool, limit: usize) -> Value {
         match record["t"].as_str() {
             Some("done") => {
                 if coverage[section] == "not_collected" {
-                    coverage.insert(expected.iter().copied().find(|s| *s == section).unwrap_or(""), "complete");
+                    coverage.insert(
+                        expected
+                            .iter()
+                            .copied()
+                            .find(|s| *s == section)
+                            .unwrap_or(""),
+                        "complete",
+                    );
                 }
             }
             Some("issue") => {
@@ -138,7 +145,11 @@ pub fn inspect_records(input: &[u8], include_wmi: bool, limit: usize) -> Value {
                 } else {
                     "unavailable"
                 };
-                let id = expected.iter().copied().find(|s| *s == section).unwrap_or("");
+                let id = expected
+                    .iter()
+                    .copied()
+                    .find(|s| *s == section)
+                    .unwrap_or("");
                 coverage.insert(id, state);
                 warnings.push(warning(section, code));
                 if code == "limit_reached" {
@@ -214,7 +225,9 @@ pub fn inspect_records(input: &[u8], include_wmi: bool, limit: usize) -> Value {
                     };
                     if dynamic == "possible" && source != "executable_path" {
                         assessment = ("unknown", "medium", "wmi_event_variable_may_control_target");
-                    } else if (present == Some(true) || source == "executable_path") && target.is_none() {
+                    } else if (present == Some(true) || source == "executable_path")
+                        && target.is_none()
+                    {
                         assessment = ("unknown", "medium", "wmi_template_target_unresolved");
                     } else if source == "template_static" && target.is_some() {
                         assessment = ("review", "medium", "wmi_template_launch_review");
@@ -252,15 +265,31 @@ pub fn inspect_records(input: &[u8], include_wmi: bool, limit: usize) -> Value {
         warnings.push(warning("input", "entry_or_record_limit"));
     }
     if ids_missing {
-        warnings.push(warning("input", "stable_id_key_unavailable_for_some_entries"));
+        warnings.push(warning(
+            "input",
+            "stable_id_key_unavailable_for_some_entries",
+        ));
     }
     let complete = coverage.values().filter(|s| **s == "complete").count();
-    let denied = coverage.values().filter(|s| **s == "permission_denied").count();
+    let denied = coverage
+        .values()
+        .filter(|s| **s == "permission_denied")
+        .count();
     let all_complete = complete == expected.len();
-    let bad_input = warnings.iter().any(|v| matches!(
-        v["code"].as_str(),
-        Some("invalid_record" | "record_too_large" | "record_count_limit" | "unknown_section" | "unsafe_legacy_record" | "invalid_entry_id" | "duplicate_entry_id")
-    ));
+    let bad_input = warnings.iter().any(|v| {
+        matches!(
+            v["code"].as_str(),
+            Some(
+                "invalid_record"
+                    | "record_too_large"
+                    | "record_count_limit"
+                    | "unknown_section"
+                    | "unsafe_legacy_record"
+                    | "invalid_entry_id"
+                    | "duplicate_entry_id"
+            )
+        )
+    });
     let status = if all_complete && !truncated && !bad_input {
         "complete"
     } else if complete > 0 || !entries.is_empty() {
@@ -310,21 +339,31 @@ fn validate_target(value: Option<&str>) -> Option<String> {
     }
     let lower = value.to_ascii_lowercase();
     if ![".exe", ".com", ".cmd", ".bat", ".ps1", ".vbs", ".lnk"]
-        .iter().any(|suffix| lower.ends_with(suffix))
+        .iter()
+        .any(|suffix| lower.ends_with(suffix))
     {
         return None;
     }
     // C:\Users\<redacted> is allowed. A raw profile username isn't.
     let parts: Vec<&str> = value.split('\\').collect();
-    if parts.len() > 2 && parts[0].ends_with(':')
-        && parts[1].eq_ignore_ascii_case("users") && parts[2] != "<redacted>"
+    if parts.len() > 2
+        && parts[0].ends_with(':')
+        && parts[1].eq_ignore_ascii_case("users")
+        && parts[2] != "<redacted>"
     {
         return None;
     }
     if value.contains('%') {
         let allowed = [
-            "%systemroot%", "%windir%", "%programfiles%", "%programfiles(x86)%",
-            "%appdata%", "%localappdata%", "%userprofile%", "%temp%", "%tmp%",
+            "%systemroot%",
+            "%windir%",
+            "%programfiles%",
+            "%programfiles(x86)%",
+            "%appdata%",
+            "%localappdata%",
+            "%userprofile%",
+            "%temp%",
+            "%tmp%",
         ];
         if !allowed.iter().any(|prefix| lower.starts_with(prefix))
             || lower.matches('%').count() != 2
@@ -333,9 +372,13 @@ fn validate_target(value: Option<&str>) -> Option<String> {
         }
     }
     // No whitespace other than spaces in a static path; no raw command options.
-    if value.contains(" --") || value.contains(" /") || value.contains(" -")
-        || value.contains('=') || [".exe ", ".cmd ", ".bat ", ".com ", ".ps1 ", ".vbs "]
-            .iter().any(|suffix| lower.contains(suffix))
+    if value.contains(" --")
+        || value.contains(" /")
+        || value.contains(" -")
+        || value.contains('=')
+        || [".exe ", ".cmd ", ".bat ", ".com ", ".ps1 ", ".vbs "]
+            .iter()
+            .any(|suffix| lower.contains(suffix))
     {
         return None;
     }
@@ -344,7 +387,9 @@ fn validate_target(value: Option<&str>) -> Option<String> {
 
 fn valid_entry_id(value: &str) -> bool {
     value.strip_prefix("h1:").is_some_and(|v| {
-        v.len() == 64 && v.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        v.len() == 64
+            && v.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     })
 }
 
@@ -362,20 +407,33 @@ fn assess(kind: &str, target: Option<&str>) -> (&'static str, &'static str, &'st
     if !executable {
         return ("unknown", "unrated", "target_not_executable_or_unresolved");
     }
-    if ["powershell.exe", "pwsh.exe", "cmd.exe", "wscript.exe", "cscript.exe", "mshta.exe", "rundll32.exe"]
-        .iter()
-        .any(|suffix| p.ends_with(suffix))
+    if [
+        "powershell.exe",
+        "pwsh.exe",
+        "cmd.exe",
+        "wscript.exe",
+        "cscript.exe",
+        "mshta.exe",
+        "rundll32.exe",
+    ]
+    .iter()
+    .any(|suffix| p.ends_with(suffix))
     {
         return ("review", "medium", "script_or_proxy_host_needs_context");
     }
-    if p.contains(r"\appdata\") || p.contains(r"\temp\") || p.contains(r"\downloads\")
-        || p.starts_with(r"%appdata%\") || p.starts_with(r"%temp%\")
+    if p.contains(r"\appdata\")
+        || p.contains(r"\temp\")
+        || p.contains(r"\downloads\")
+        || p.starts_with(r"%appdata%\")
+        || p.starts_with(r"%temp%\")
         || p.starts_with(r"%localappdata%\")
     {
         return ("review", "medium", "user_writable_location_not_proof");
     }
-    if p.contains(r"\program files\") || p.contains(r"\windows\system32\")
-        || p.starts_with(r"%programfiles%\") || p.starts_with(r"%systemroot%\")
+    if p.contains(r"\program files\")
+        || p.contains(r"\windows\system32\")
+        || p.starts_with(r"%programfiles%\")
+        || p.starts_with(r"%systemroot%\")
     {
         return ("observed", "low", "common_install_location_unverified");
     }
@@ -410,8 +468,14 @@ mod tests {
 
     #[test]
     fn rejects_unsanitized_commands() {
-        assert_eq!(validate_target(Some(r"C:\Tools\agent.exe --token secret")), None);
-        assert_eq!(validate_target(Some(r"C:\Users\Alice\AppData\agent.exe")), None);
+        assert_eq!(
+            validate_target(Some(r"C:\Tools\agent.exe --token secret")),
+            None
+        );
+        assert_eq!(
+            validate_target(Some(r"C:\Users\Alice\AppData\agent.exe")),
+            None
+        );
         assert_eq!(validate_target(Some(r"\\server\share\a.exe")), None);
         assert_eq!(validate_target(Some("https://secret.example/a.exe")), None);
         assert_eq!(
@@ -435,16 +499,25 @@ mod tests {
             assess("run", Some(r"C:\Program Files\Acme\updater.exe")).0,
             "observed"
         );
-        assert_eq!(assess("run", Some(r"C:\Users\<redacted>\AppData\Local\a.exe")).0, "review");
+        assert_eq!(
+            assess("run", Some(r"C:\Users\<redacted>\AppData\Local\a.exe")).0,
+            "review"
+        );
     }
 
     #[test]
     fn limits_and_malformed_are_not_clean() {
         let huge = vec![b'x'; MAX_CAPTURE_BYTES + 1];
         assert_eq!(inspect_records(&huge, false, 10)["status"], "error");
-        assert_eq!(inspect_records(b"invalid json", false, 10)["status"], "error");
+        assert_eq!(
+            inspect_records(b"invalid json", false, 10)["status"],
+            "error"
+        );
         let bad = format!("{{\"t\":\"entry\",\"section\":\"startup_user\",\"kind\":\"startup\",\"raw_target\":\"{}\"}}", "x".repeat(10_000));
-        assert_eq!(inspect_records(bad.as_bytes(), false, 10)["status"], "error");
+        assert_eq!(
+            inspect_records(bad.as_bytes(), false, 10)["status"],
+            "error"
+        );
     }
 
     #[test]
@@ -456,12 +529,20 @@ mod tests {
         let r = inspect_records(&data, false, 1);
         assert_eq!(r["entries"].as_array().unwrap().len(), 1);
         assert_eq!(r["status"], "complete");
-        assert!(r["warnings"].as_array().unwrap().iter().any(|v| v["code"] == "duplicate_record"));
+        assert!(r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["code"] == "duplicate_record"));
     }
 
     #[test]
     fn permission_denied_is_not_empty_success() {
-        let r = inspect_records(br#"{"t":"issue","section":"registry_hklm_64_run","code":"permission_denied"}"#, false, 10);
+        let r = inspect_records(
+            br#"{"t":"issue","section":"registry_hklm_64_run","code":"permission_denied"}"#,
+            false,
+            10,
+        );
         assert_eq!(r["status"], "permission_denied");
     }
 }

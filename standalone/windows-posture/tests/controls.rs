@@ -93,7 +93,10 @@ fn inaccessible_probes_are_not_mislabeled_disabled() {
 fn timeout_cannot_be_reported_as_secure() {
     let report = evaluate(&json!({"secure_boot":{"status":"timeout"}}), 5).unwrap();
     assert_eq!(entry(&report, "secure_boot")["state"], "unknown");
-    assert_eq!(entry(&report, "secure_boot")["warnings"][0], "probe_timeout");
+    assert_eq!(
+        entry(&report, "secure_boot")["warnings"][0],
+        "probe_timeout"
+    );
     assert_eq!(report["status"], "unavailable");
 }
 
@@ -150,7 +153,10 @@ fn configured_hvci_is_not_the_same_as_running_hvci() {
     let report = evaluate(&fixture, 5).unwrap();
     assert_eq!(entry(&report, "vbs")["state"], "disabled");
     assert_eq!(entry(&report, "hvci")["state"], "disabled");
-    assert_eq!(entry(&report, "hvci")["warnings"][0], "configured_but_not_running");
+    assert_eq!(
+        entry(&report, "hvci")["warnings"][0],
+        "configured_but_not_running"
+    );
 }
 
 #[test]
@@ -224,7 +230,6 @@ fn varying_timestamps_are_not_cached() {
     assert_eq!(a["entries"][0]["checked_at"], 100);
     assert_eq!(b["entries"][0]["checked_at"], 200);
 }
-
 
 #[test]
 fn failed_bitlocker_read_methods_never_imply_protection() {

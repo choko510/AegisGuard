@@ -412,11 +412,26 @@ impl AegisApp {
                     "観測できた範囲の確認です",
                     "ブラウザー領域へのDLL配置・COM登録の変更・ブラウザーによる読込みを、収集済みのイベントから確認します。ファイルやレジストリを削除・変更しません。",
                 );
-                fluent::section(ui, "確認項目");
-                let icons = [icon::BROWSER, icon::SENSOR, icon::LOCK, icon::BROWSER];
-                rows(ui, p, &views::browser_rows(&self.data, now), &icons);
                 fluent::section(ui, "タイムライン");
                 self.timelines(ui, p);
+                let icons = [icon::SHIELD, icon::SENSOR, icon::LOCK, icon::SETTINGS];
+                for browser in views::BROWSERS {
+                    fluent::section(ui, browser);
+                    rows(
+                        ui,
+                        p,
+                        &views::browser_coverage(&self.data, browser, now),
+                        &icons,
+                    );
+                }
+                fluent::section(ui, "手動での確認");
+                fluent::info_bar(
+                    ui,
+                    p,
+                    Status::Observed,
+                    "AegisGuardはファイルやレジストリを削除しません",
+                    "気になる結果があれば、ブラウザーの拡張機能の一覧（chrome://extensions、edge://extensions、brave://extensions、about:addons）と「設定のリセット」をブラウザー公式の手順で確認し、Microsoft Defenderでフルスキャンを実行してください。DLLやレジストリを手作業で消すと、正規のブラウザーや更新を壊すことがあります。",
+                );
             }
             Page::Realtime => {
                 fluent::section(ui, "サービス");
@@ -998,13 +1013,19 @@ impl AegisApp {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(icon_text(icon::DOCUMENT, theme::ICON, p.text));
-                    ui.add(
+                    // Leave room for the stage counter on the right.
+                    let width = (ui.available_width() - 150.0).max(80.0);
+                    let fit = (width / (theme::BODY * 0.6)) as usize;
+                    let path = t["dll_path"].as_str().unwrap_or("");
+                    ui.add_sized(
+                        [width, 20.0],
                         egui::Label::new(
-                            RichText::new(elide(t["dll_path"].as_str().unwrap_or(""), 90))
+                            RichText::new(elide(path, fit.clamp(16, 120)))
                                 .font(theme::body_strong()),
                         )
                         .truncate(),
-                    );
+                    )
+                    .on_hover_text(elide(path, 2000));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(format!(

@@ -73,6 +73,39 @@ struct Layer {
     depth: usize,
 }
 
+struct Derivations {
+    layers: Vec<(String, String)>,
+    reasons: Vec<&'static str>,
+}
+
+impl Derivations {
+    fn new() -> Self { Self { layers: Vec::new(), reasons: Vec::new() } }
+
+    fn note(&mut self, reason: &'static str) {
+        if !self.reasons.contains(&reason) { self.reasons.push(reason); }
+    }
+
+    fn push(&mut self, origin: &str, value: String) {
+        if value.is_empty() { return; }
+        if value.len() > MAX_LAYER_BYTES {
+            self.note("derived_layer_size_limit");
+        } else {
+            self.layers.push((origin.to_owned(), value));
+        }
+    }
+}
+
+/// Check growth with overflow-safe arithmetic before any replacement allocation.
+fn replace_bounded(input: &str, pattern: &str, replacement: &str, limit: usize) -> Result<Option<String>, ()> {
+    let count = input.matches(pattern).count();
+    if count == 0 { return Ok(None); }
+    let removed = count.checked_mul(pattern.len()).ok_or(())?;
+    let added = count.checked_mul(replacement.len()).ok_or(())?;
+    let size = input.len().checked_sub(removed).and_then(|n| n.checked_add(added)).ok_or(())?;
+    if size > limit { return Err(()); }
+    Ok(Some(input.replace(pattern, replacement)))
+}
+
 fn utf16_decode(bytes: &[u8], little: bool) -> Option<String> {
     if bytes.len() % 2 != 0 {
         return None;
@@ -158,30 +191,38 @@ fn inflate_bounded(data: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-fn decode_b64(encoded: &str) -> Option<String> {
+fn decode_b64(encoded: &str) -> (Option<String>, bool) {
     if encoded.len() > 8192 || encoded.len() % 4 != 0 {
-        return None;
+        return (None, encoded.len() > 8192);
     }
-    let raw = STANDARD.decode(encoded).ok()?;
-    if let Some(source) = looks_like_source(&raw) {
-        return Some(source);
-    }
-    let expanded = inflate_bounded(&raw)?;
-    looks_like_source(&expanded)
+    let Ok(raw) = STANDARD.decode(encoded) else { return (None, false); };
+    if let Some(source) = looks_like_source(&raw) { return (Some(source), false); }
+    // Only treat compressed content as a relevant candidate when the format is identifiable.
+    let compressed = raw.starts_with(&[0x1f, 0x8b]) ||
+        (raw.len() >= 2 && raw[0] == 0x78 && [0x01, 0x5e, 0x9c, 0xda].contains(&raw[1]));
+    if !compressed { return (None, false); }
+    let Some(expanded) = inflate_bounded(&raw) else { return (None, true); };
+    (looks_like_source(&expanded), false)
 }
 
-fn derive(text: &str, is_batch: bool) -> Vec<(String, String)> {
-    let mut out = Vec::new();
+fn derive(text: &str, is_batch: bool) -> Derivations {
+    let mut out = Derivations::new();
     // Explicit PowerShell EncodedCommand is generally UTF-16LE.
     for caps in PS_ENC.captures_iter(text).take(16) {
-        if let Some(value) = caps.get(1).and_then(|m| decode_b64(m.as_str())) {
-            out.push(("powershell_encoded_command".into(), value));
+        if let Some(encoded) = caps.get(1) {
+            let (value, limited) = decode_b64(encoded.as_str());
+            if limited { out.note("encoded_payload_size_limit"); }
+            if let Some(value) = value { out.push("powershell_encoded_command", value); }
         }
     }
     for matched in B64.find_iter(text).take(32) {
-        if let Some(value) = decode_b64(matched.as_str()) {
-            out.push(("base64".into(), value));
+        let (value, limited) = decode_b64(matched.as_str());
+        if limited { out.note("encoded_payload_size_limit"); }
+        if matched.len() == 8192 &&
+           text.as_bytes().get(matched.end()).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/') {
+            out.note("encoded_token_size_limit");
         }
+        if let Some(value) = value { out.push("base64", value); }
     }
     for caps in JS_CHARCODE.captures_iter(text).take(16) {
         if let Some(content) = caps.get(1) {
@@ -192,7 +233,7 @@ fn derive(text: &str, is_batch: bool) -> Vec<(String, String)> {
                     .map(|n| n.parse::<u32>().ok().and_then(char::from_u32))
                     .collect();
                 if let Some(value) = decoded {
-                    out.push(("js_charcode".into(), value));
+                    out.push("js_charcode", value);
                 }
             }
         }
@@ -209,7 +250,7 @@ fn derive(text: &str, is_batch: bool) -> Vec<(String, String)> {
             })
             .collect();
         if let Some(value) = value {
-            out.push(("python_chr".into(), value));
+            out.push("python_chr", value);
         }
     }
     for matched in CONCAT.find_iter(text).take(24) {
@@ -221,12 +262,12 @@ fn derive(text: &str, is_batch: bool) -> Vec<(String, String)> {
             }
         }
         if !joined.is_empty() {
-            out.push(("literal_concat".into(), joined));
+            out.push("literal_concat", joined);
         }
     }
     for caps in JS_REVERSE.captures_iter(text).take(16) {
         if let Some(value) = caps.get(1).or_else(|| caps.get(2)) {
-            out.push(("js_reverse".into(), value.as_str().chars().rev().collect()));
+            out.push("js_reverse", value.as_str().chars().rev().collect());
         }
     }
     for matched in HEX_ESCAPE.find_iter(text).take(16) {
@@ -237,7 +278,7 @@ fn derive(text: &str, is_batch: bool) -> Vec<(String, String)> {
             .filter_map(|part| u8::from_str_radix(std::str::from_utf8(&part[2..]).ok()?, 16).ok())
             .collect();
         if let Ok(value) = String::from_utf8(bytes) {
-            out.push(("hex_escape".into(), value));
+            out.push("hex_escape", value);
         }
     }
     for matched in UNICODE_ESCAPE.find_iter(text).take(16) {
@@ -251,7 +292,7 @@ fn derive(text: &str, is_batch: bool) -> Vec<(String, String)> {
             })
             .collect();
         if let Some(value) = chars {
-            out.push(("unicode_escape".into(), value));
+            out.push("unicode_escape", value);
         }
     }
     if is_batch {

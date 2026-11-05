@@ -58,7 +58,7 @@ fn deterministic_all_files_and_cross_platform_jsonl() {
     let first = snap(&a);
     assert_eq!(first, snap(&b));
     assert_ne!(first, snap(&c));
-    assert_eq!(first.len(), 1 + 10 + first.iter().filter(|p| p.0.ends_with(".xml")).count());
+    assert_eq!(first.len(), 1 + 10 + 10 + 1 + first.iter().filter(|p| p.0.ends_with(".xml")).count());
     assert_eq!(verify(&a).unwrap()["status"], "complete");
     let xml = fs::read_to_string(a.join("k2f-analog-chain/event-000.xml")).unwrap();
     assert!(xml.contains("Microsoft-Windows-Sysmon"));
@@ -79,7 +79,7 @@ fn only_new_directory_and_no_commands_are_executed() {
     let s = fs::read_to_string(a.join("admin-script/events.jsonl")).unwrap();
     assert!(s.contains("CommandLine_sha256"));
     assert!(!s.contains("powershell.exe -NoProfile"));
-    assert_eq!(fs::read_dir(a.join("admin-script")).unwrap().count(), 2);
+    assert_eq!(fs::read_dir(a.join("admin-script")).unwrap().count(), 3);
 }
 
 #[test]

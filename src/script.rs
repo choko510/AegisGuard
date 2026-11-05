@@ -373,7 +373,10 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
         // No environment lookups or execution; only literal assignments in the sample.
         // A malicious script can bury SET assignments beyond the scan window.
         if text.lines().skip(512).any(|line| {
-            line.trim().trim_start_matches('@').trim().get(..4)
+            line.trim()
+                .trim_start_matches('@')
+                .trim()
+                .get(..4)
                 .is_some_and(|p| p.eq_ignore_ascii_case("set "))
         }) {
             out.note("batch_assignment_scan_limit");
@@ -723,7 +726,6 @@ mod resource_limit_tests {
     }
 }
 
-
 #[cfg(test)]
 mod candidate_limit_tests {
     use super::*;
@@ -732,7 +734,10 @@ mod candidate_limit_tests {
     #[test]
     fn omitted_base64_candidates_are_marked_incomplete() {
         let payload = STANDARD.encode("print('harmless') and words for a long script");
-        let sample = (0..35).map(|_| payload.as_str()).collect::<Vec<_>>().join(" ");
+        let sample = (0..35)
+            .map(|_| payload.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         let mut report = Report::new("many.py".into(), "script");
         inspect(sample.as_bytes(), &mut report);
         report.finish();
@@ -744,11 +749,14 @@ mod candidate_limit_tests {
     fn unprocessed_batch_assignments_are_marked_incomplete() {
         let sample = (0..34)
             .map(|i| format!("set \"VAL{i}=test\""))
-            .collect::<Vec<_>>().join("\n");
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut report = Report::new("many.cmd".into(), "script");
         inspect(sample.as_bytes(), &mut report);
         report.finish();
-        assert!(report.incomplete_reasons.contains(&"batch_assignment_count_limit"));
+        assert!(report
+            .incomplete_reasons
+            .contains(&"batch_assignment_count_limit"));
         assert_ne!(report.risk, "low_signal");
     }
 
@@ -758,6 +766,8 @@ mod candidate_limit_tests {
         let mut report = Report::new("many.bat".into(), "script");
         inspect(sample.as_bytes(), &mut report);
         report.finish();
-        assert!(report.incomplete_reasons.contains(&"batch_assignment_scan_limit"));
+        assert!(report
+            .incomplete_reasons
+            .contains(&"batch_assignment_scan_limit"));
     }
 }

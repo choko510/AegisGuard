@@ -11,7 +11,11 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Parser)]
-#[command(author, version, about = "AegisGuard: read-only file triage and defensive C2 indicator lookup")]
+#[command(
+    author,
+    version,
+    about = "AegisGuard: read-only file triage and defensive C2 indicator lookup"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -58,7 +62,11 @@ enum C2Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Scan { path, recursive, output } => scan::run(&path, recursive, output.as_deref())?,
+        Commands::Scan {
+            path,
+            recursive,
+            output,
+        } => scan::run(&path, recursive, output.as_deref())?,
         Commands::C2 { command } => match command {
             C2Command::Update { cache } => c2::update(&cache)?,
             C2Command::Check { ip, cache } => c2::check(&cache, ip)?,

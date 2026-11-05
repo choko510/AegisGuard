@@ -469,7 +469,7 @@ pub fn network_rows(data: &Dataset, now: u64) -> Vec<StatusRow> {
                 .as_array()
                 .map(|v| {
                     v.iter()
-                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .filter_map(|x| x.as_str().map(visibility_text))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -481,11 +481,11 @@ pub fn network_rows(data: &Dataset, now: u64) -> Vec<StatusRow> {
                     Status::Incomplete
                 },
                 format!(
-                    "一致 {findings} 件。見えていないもの: {}",
+                    "一致 {findings} 件。見えていない範囲：{}",
                     if invisible.is_empty() {
                         "記録なし".into()
                     } else {
-                        invisible.join(", ")
+                        invisible.join(" ")
                     }
                 ),
             )
@@ -496,10 +496,142 @@ pub fn network_rows(data: &Dataset, now: u64) -> Vec<StatusRow> {
         iocs,
         row(
             "通信のライブ監査",
-            Status::NotAvailable,
-            "常駐サービス（P8）の後に対応します。",
+            if data.documents.iter().any(|d| {
+                d.kind == DocumentKind::IocAttribution
+                    && d.path.to_string_lossy() == "（サービスのライブ結果）"
+            }) {
+                Status::Observed
+            } else {
+                Status::NoData
+            },
+            "常駐サービスに接続していれば、直近6時間のイベントを5秒ごとに表示します。通信の遮断はしません。",
         ),
     ]
+}
+
+/// Japanese explanation of a network visibility limit code.
+pub fn visibility_text(code: &str) -> String {
+    let key = code.split(':').next().unwrap_or(code);
+    match key {
+        "network_connect_not_observed" => {
+            "Sysmonの通信イベント（ID 3）が観測されていません。通信の有無は不明で、「通信なし」ではありません。".into()
+        }
+        "dns_query_not_observed" => {
+            "Sysmonの名前解決イベント（ID 22）が観測されていません。ドメインのIOCでの帰属はできません。".into()
+        }
+        "dns_over_https_vpn_and_nrpt_are_not_visible_to_sysmon" => {
+            "DoH/DoT・VPN・NRPT経由の名前解決はSysmonから見えません。".into()
+        }
+        _ => code.to_string(),
+    }
+}
+
+fn basename(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
+fn unix_date(secs: u64) -> String {
+    crate::app::utc(i64::try_from(secs).unwrap_or(0).saturating_mul(1000))
+}
+
+/// One row per process -> destination attribution (P9-02), with the IOC
+/// origin, freshness, expiry and the shared-infrastructure caveat.
+pub fn network_finding_rows(data: &Dataset) -> Vec<StatusRow> {
+    let Some(doc) = data.latest(DocumentKind::IocAttribution) else {
+        return Vec::new();
+    };
+    let findings = doc.value["report"]["findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    findings
+        .iter()
+        .take(500)
+        .map(|f| {
+            let status = match f["verdict"].as_str() {
+                Some("review") => Status::Review,
+                Some("stale_only") => Status::Stale,
+                Some("suppressed") => Status::Observed,
+                _ => Status::Incomplete,
+            };
+            let image = f["image"].as_str().map_or("（プロセス不明）", basename);
+            let basis = match f["basis"].as_str() {
+                Some("direct_ip") => "接続先IPが一致",
+                Some("dns_query") => "IOCドメインを名前解決（接続は未確認）",
+                Some("dns_then_connect") => "名前解決の回答IPへ5分以内に接続",
+                _ => "根拠不明",
+            };
+            let sources: Vec<String> = f["evidence"]
+                .as_array()
+                .map(|e| {
+                    e.iter()
+                        .map(|ev| {
+                            format!(
+                                "{}（{}、期限 {}{}）",
+                                ev["source_id"].as_str().unwrap_or("?"),
+                                ev["license_ref"].as_str().unwrap_or("?"),
+                                unix_date(ev["expires_at_unix"].as_u64().unwrap_or(0)),
+                                if ev["stale"] == Value::Bool(true) {
+                                    "・期限切れ"
+                                } else {
+                                    ""
+                                }
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let shared = if f["shared_destination"] == Value::Bool(true) {
+                "複数のプログラムが接続している宛先（CDN・共有基盤の可能性）。"
+            } else {
+                ""
+            };
+            row(
+                format!("{image} → {}", f["destination"].as_str().unwrap_or("?")),
+                status,
+                format!(
+                    "{basis}。確度 {}。{shared}出所：{}。{}",
+                    f["confidence"].as_str().unwrap_or("?"),
+                    if sources.is_empty() {
+                        "なし".into()
+                    } else {
+                        sources.join("、")
+                    },
+                    f["at_unix_ms"]
+                        .as_i64()
+                        .map(|t| format!("{} UTC", crate::app::utc(t)))
+                        .unwrap_or_default()
+                ),
+            )
+        })
+        .collect()
+}
+
+/// Whether network attribution could evaluate anything: false when neither
+/// connection (Sysmon 3) nor DNS (Sysmon 22) events were observed.
+pub fn network_evaluable(data: &Dataset) -> bool {
+    let Some(doc) = data.latest(DocumentKind::IocAttribution) else {
+        return false;
+    };
+    let vis: Vec<&str> = doc.value["report"]["visibility"]
+        .as_array()
+        .map(|v| v.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let missing = |k: &str| vis.iter().any(|v| v.starts_with(k));
+    !(missing("network_connect_not_observed") && missing("dns_query_not_observed"))
+}
+
+/// Visibility limits of the latest attribution (always shown).
+pub fn network_visibility(data: &Dataset) -> Vec<String> {
+    data.latest(DocumentKind::IocAttribution)
+        .and_then(|d| d.value["report"]["visibility"].as_array().cloned())
+        .map(|v| {
+            v.iter()
+                .filter_map(Value::as_str)
+                .map(visibility_text)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn rules_row(data: &Dataset, now: u64) -> StatusRow {
@@ -668,6 +800,39 @@ mod tests {
             NOW,
         ));
         assert_eq!(browser_rows(&d, NOW)[1].status, Status::Incomplete);
+    }
+
+    #[test]
+    fn network_rows_show_origin_expiry_and_uncertainty() {
+        let mut d = Dataset::default();
+        d.documents.push(doc(
+            DocumentKind::IocAttribution,
+            serde_json::json!({"report": {"findings": [
+                {"image": "C:\\x\\app.exe", "destination": "192.0.2.66:443", "basis": "direct_ip", "verdict": "review", "confidence": "medium", "shared_destination": false,
+                 "evidence": [{"source_id": "feodo", "license_ref": "CC0", "expires_at_unix": 2_000_000_000u64, "stale": false}]},
+                {"image": null, "destination": "203.0.113.5", "basis": "dns_query", "verdict": "stale_only", "confidence": "low", "shared_destination": true,
+                 "evidence": [{"source_id": "local", "license_ref": "user", "expires_at_unix": 1u64, "stale": true}]}
+            ], "visibility": ["network_connect_not_observed: connections are unknown, not absent", "dns_over_https_vpn_and_nrpt_are_not_visible_to_sysmon"]}}),
+            NOW,
+        ));
+        let rows = network_finding_rows(&d);
+        assert_eq!(rows[0].status, Status::Review);
+        assert!(rows[0].name.starts_with("app.exe → 192.0.2.66"));
+        assert!(rows[0].detail.contains("feodo") && rows[0].detail.contains("CC0"));
+        assert_eq!(rows[1].status, Status::Stale);
+        assert!(rows[1].detail.contains("期限切れ") && rows[1].detail.contains("CDN"));
+        assert!(rows[1].name.contains("プロセス不明"));
+        let vis = network_visibility(&d);
+        assert!(network_evaluable(&d));
+        let mut none = Dataset::default();
+        none.documents.push(doc(
+            DocumentKind::IocAttribution,
+            serde_json::json!({"report": {"findings": [], "visibility": ["network_connect_not_observed: x", "dns_query_not_observed: y"]}}),
+            NOW,
+        ));
+        assert!(!network_evaluable(&none));
+        assert!(vis[0].contains("「通信なし」ではありません"));
+        assert!(vis[1].contains("DoH"));
     }
 
     #[test]

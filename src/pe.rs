@@ -30,50 +30,56 @@ fn entropy(data: &[u8]) -> f64 {
 /// Strictly bounded PE structural triage; not Authenticode verification or a disassembler.
 /// All offsets derive from the file and are checked before slicing.
 pub fn inspect(data: &[u8], report: &mut Report) {
+    report.analyzer("pe_header");
     if !data.starts_with(b"MZ") {
-        report.unavailable("invalid_pe", "Missing DOS MZ signature");
+        report.unavailable("invalid_pe", "malformed_pe", "Missing DOS MZ signature");
         return;
     }
     let Some(pe_offset) = le_u32(data, 0x3c).map(|n| n as usize) else {
-        report.unavailable("invalid_pe", "Truncated DOS header");
+        report.unavailable("invalid_pe", "malformed_pe", "Truncated DOS header");
         return;
     };
     if data.get(pe_offset..pe_offset.saturating_add(4)) != Some(&b"PE\0\0"[..]) {
-        report.unavailable("invalid_pe", "Missing NT PE signature");
+        report.unavailable("invalid_pe", "malformed_pe", "Missing NT PE signature");
         return;
     }
     let coff = pe_offset + 4;
     let Some(section_count) = le_u16(data, coff + 2).map(usize::from) else {
-        report.unavailable("invalid_pe", "Truncated COFF header");
+        report.unavailable("invalid_pe", "malformed_pe", "Truncated COFF header");
         return;
     };
     let Some(optional_header_bytes) = le_u16(data, coff + 16).map(usize::from) else {
-        report.unavailable("invalid_pe", "Missing optional header size");
+        report.unavailable("invalid_pe", "malformed_pe", "Missing optional header size");
         return;
     };
     if section_count == 0 || section_count > 96 {
-        report.unavailable("invalid_pe", "Section count outside safe bounds");
+        report.unavailable(
+            "invalid_pe",
+            "malformed_pe",
+            "Section count outside safe bounds",
+        );
         return;
     }
     let Some(sections) = coff
         .checked_add(20)
         .and_then(|n| n.checked_add(optional_header_bytes))
     else {
-        report.unavailable("invalid_pe", "Invalid PE section offsets");
+        report.unavailable("invalid_pe", "malformed_pe", "Invalid PE section offsets");
         return;
     };
     let Some(end) = section_count
         .checked_mul(40)
         .and_then(|n| sections.checked_add(n))
     else {
-        report.unavailable("invalid_pe", "Invalid PE section table");
+        report.unavailable("invalid_pe", "malformed_pe", "Invalid PE section table");
         return;
     };
     if end > data.len() {
-        report.unavailable("invalid_pe", "Truncated PE section table");
+        report.unavailable("invalid_pe", "malformed_pe", "Truncated PE section table");
         return;
     }
 
+    report.analyzer("pe_sections");
     let mut has_wx = false;
     let mut high_entropy = false;
     for i in 0..section_count {
@@ -88,11 +94,19 @@ pub fn inspect(data: &[u8], report: &mut Report) {
             continue;
         }
         let Some(stop) = start.checked_add(size) else {
-            report.unavailable("invalid_pe", "Section raw data pointer overflow");
+            report.unavailable(
+                "invalid_pe",
+                "malformed_pe",
+                "Section raw data pointer overflow",
+            );
             return;
         };
         let Some(raw) = data.get(start..stop) else {
-            report.unavailable("invalid_pe", "Section raw data outside file");
+            report.unavailable(
+                "invalid_pe",
+                "malformed_pe",
+                "Section raw data outside file",
+            );
             return;
         };
         if raw.len() >= 4096 && entropy(&raw[..raw.len().min(65536)]) >= 7.3 {
@@ -128,6 +142,9 @@ mod tests {
         inspect(b"MZ", &mut report);
         report.finish();
         assert_eq!(report.risk, "not_assessed");
+        assert_eq!(report.status, "invalid_pe");
+        assert_eq!(report.not_assessed_reason, Some("malformed_pe"));
+        assert_eq!(report.score, 0);
     }
 
     #[test]

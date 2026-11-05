@@ -425,7 +425,7 @@ fn report(
     if let Some(reason) = problem {
         warnings.push(reason);
     }
-    if lines_read == 0 && problem.is_none() {
+    if inspected.lines_json + inspected.lines_log == 0 && problem.is_none() {
         warnings.push("empty_input_not_assessed");
     }
     let entries: Vec<Value> = inspected.entries.iter().map(LeakFinding::to_json).collect();
@@ -524,7 +524,11 @@ pub fn audit_reader<R: BufRead>(mut reader: R, mode: Mode) -> Value {
             return failure(reason, inspected, lines_read, bytes_read, mode);
         }
     }
-    let status = if lines_read == 0 { "partial" } else { "complete" };
+    let status = if inspected.lines_json + inspected.lines_log == 0 {
+        "partial"
+    } else {
+        "complete"
+    };
     report(status, None, inspected, lines_read, bytes_read, mode)
 }
 
@@ -699,6 +703,7 @@ mod tests {
     #[test]
     fn empty_and_oversized_tokens_are_not_success() {
         assert_eq!(exit_code(&audit_reader(b"", Mode::Auto)), 3);
+        assert_eq!(exit_code(&audit_reader(b"  \n\t\n", Mode::Auto)), 3);
         let token = "A".repeat(MAX_TOKEN_BYTES + 1);
         let result = audit_reader(token.as_bytes(), Mode::Log);
         assert_eq!(exit_code(&result), 3);

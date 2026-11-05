@@ -3,7 +3,6 @@ name = "aegisguard"
 version = "0.1.0"
 edition = "2021"
 description = "Windows-first, Defender-compatible static threat triage toolkit"
-license = "MIT"
 repository = "https://github.com/choko510/AegisGuard"
 rust-version = "1.85"
 

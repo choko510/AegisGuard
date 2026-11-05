@@ -33,7 +33,7 @@ cargo test --locked
 - `<case_id>/inert.txt`：非実行型の無害なダミーファイル。
 - `stale-ioc/expired-ioc.json`：ダミーの失効IOC。**現行AegisGuardのC2キャッシュと互換性なし**。
 
-`schema_version/module/generated_at_unix_ms/status/entries/warnings/coverage` を持つJSONを標準出力に1行返します。`status` は `complete/partial/error`。実際の権限・実装不明は安全判定しません。標準出力の生成時刻は実行ごとに異なりますが、**生成コーパス自体**は固定時刻・UTF-8・LFで保存し、同seedならバイト単位で同一です。
+`schema_version/module/generated_at_unix_ms/status/entries/warnings/coverage` を持つJSONを標準出力に1行返します。`status` は `complete/partial/unavailable/permission_denied/error`。実際の権限・実装不明は安全判定しません。標準出力の生成時刻は実行ごとに異なりますが、**生成コーパス自体**は固定時刻・UTF-8・LFで保存し、同seedならバイト単位で同一です。
 
 `verify` 出力例（時刻のみ省略）:
 

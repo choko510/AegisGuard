@@ -542,7 +542,7 @@ pub fn verify(dir: &Path) -> LabResult<Value> {
                     match serde_json::from_slice::<Value>(&bytes) {
                         Ok(v) if v["expires_at_unix_ms"].as_u64().is_some_and(|t| t < BASE_MS)
                             && v["indicator"] == "192.0.2.42"
-                            && v["compatible_with_aegisguard_c2_cache"] == false => {}
+                            && v["compatible_with_aegisguard_c2_cache"].as_bool() == Some(false) => {}
                         _ => errors.push("invalid or non-expired synthetic IOC".into()),
                     }
                 }
@@ -586,9 +586,9 @@ pub fn summarize(expected: &Path, actual: &Path) -> LabResult<Value> {
         }
         let case_id = v["case_id"].as_str().or_else(|| {
             if manifest.cases.len() == 1 { Some(manifest.cases[0].case_id.as_str()) } else { None }
-        }).ok_or("report lacks case_id for multi-case corpus")?;
+        }).ok_or("report lacks case_id for multi-case corpus")?.to_owned();
         if !manifest.cases.iter().any(|c| c.case_id == case_id) ||
-            reports.insert(case_id.to_owned(), v).is_some() {
+            reports.insert(case_id, v).is_some() {
             return Err("unknown or duplicate report case_id".into());
         }
     }

@@ -71,7 +71,7 @@ AegisGuard本体から独立した**読み取り専用**Rust CLIです。指定�
 
 ## 規則と範囲
 
-- JSON: 再帰的に文字列のキー/値を検査。`password`、`authorization`、`cookie`、`access_token`、`api_key`、`private_key`、`bitlocker_recovery_key` などのキーを検出。`null`・明示的な `[REDACTED]`・`***` 等は誤検知抑制。
+- JSON: 再帰的に文字列のキー/値を検査。重複JSONキーで古い値が上書きされる場合に備え、生のJSON行にも固定パターンを適用（一般的な秘密書式の補助検出であり完全検出ではない）。`password`、`authorization`、`cookie`、`access_token`、`api_key`、`private_key`、`bitlocker_recovery_key` などのキーを検出。`null`・明示的な `[REDACTED]`・`***` 等は誤検知抑制。
 - 平文/JSON文字列: Bearer、JWT形、Cookieヘッダー、キー代入、PowerShell引数、機密URLクエリ、Windows/Unixのホームパス、48桁のBitLocker回復パスワード形、秘密鍵PEM見出しを検出。
 - HTML数値実体の一部、URLの `%3D` 等の一部、全角英数字を限定的に正規化して検査。
 - 長さが十分なランダムなbase64だけでは秘密と決めつけません。強いヒューリスティックスも正常値を誤検出し得ます。

@@ -56,6 +56,10 @@ enum Commands {
         /// (audit only; needs a build with `--features yara`).
         #[arg(long, conflicts_with = "rule_store")]
         yara_rules: Option<PathBuf>,
+        /// Reuse YARA results of unchanged files from this cache file (keyed by
+        /// file SHA-256 x rule set x engine; anything else is rescanned).
+        #[arg(long)]
+        yara_cache: Option<PathBuf>,
         /// Use the signed rule pack installed in this store (see `rules install`).
         #[arg(long, requires = "trusted_key")]
         rule_store: Option<PathBuf>,
@@ -556,6 +560,7 @@ fn main() -> Result<()> {
             max_total_bytes,
             max_duration_secs,
             yara_rules,
+            yara_cache,
             rule_store,
             trusted_key,
         } => {
@@ -572,19 +577,56 @@ fn main() -> Result<()> {
                 trusted_key.as_deref(),
             )?;
             #[cfg(not(feature = "yara"))]
-            if yara_rules.is_some() || rule_store.is_some() || trusted_key.is_some() {
+            if yara_rules.is_some()
+                || rule_store.is_some()
+                || trusted_key.is_some()
+                || yara_cache.is_some()
+            {
                 return Err(NO_YARA.into());
             }
             #[cfg(feature = "yara")]
+            let cache = match (&yara_cache, &ruleset) {
+                (Some(path), Some(_)) => {
+                    let c = aegisguard::result_cache::ResultCache::load(
+                        path,
+                        &yara::engine_identity(),
+                        aegisguard::result_cache::DEFAULT_MAX_ENTRIES,
+                    );
+                    if let Some(reason) = &c.discarded_reason {
+                        eprintln!("warning: yara cache: {reason}");
+                    }
+                    Some(std::cell::RefCell::new(c))
+                }
+                (Some(_), None) => {
+                    return Err("--yara-cache needs --yara-rules or --rule-store".into())
+                }
+                _ => None,
+            };
+            #[cfg(feature = "yara")]
             let engines = scan::Engines {
                 yara: ruleset.as_ref(),
+                yara_cache: cache.as_ref(),
             };
             #[cfg(not(feature = "yara"))]
             let engines = scan::Engines::default();
             let log = output
                 .map(|p| jsonl::JsonlLog::open(&p, output_max_bytes, output_generations))
                 .transpose()?;
-            scan::run(&path, recursive, log, limits, engines)?
+            let result = scan::run(&path, recursive, log, limits, engines);
+            #[cfg(feature = "yara")]
+            if let (Some(cache), Some(path)) = (&cache, &yara_cache) {
+                let c = cache.borrow();
+                eprintln!(
+                    "yara cache: {} hits, {} misses, {} entries",
+                    c.hits,
+                    c.misses,
+                    c.len()
+                );
+                if let Err(e) = c.save(path) {
+                    eprintln!("warning: yara cache not saved: {e}");
+                }
+            }
+            result?
         }
         Commands::Rules { command } => run_rules(command)?,
         Commands::Events {

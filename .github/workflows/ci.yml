@@ -57,6 +57,21 @@ jobs:
         run: cargo test --locked --all-targets --features yara
       - name: Repository rules pass the gate
         run: cargo run --locked --features yara -- rules check rules/aegisguard
+      - name: Repository rules on the synthetic corpus (false-positive gate, P5-05)
+        shell: bash
+        run: |
+          cargo run --locked --example bench_corpus -- generate bench/corpus
+          cargo run --locked --features yara -- scan bench/corpus --recursive \
+            --yara-rules rules/aegisguard --yara-cache bench/yara-cache.json > bench/scan.jsonl
+          cargo run --locked --example bench_corpus -- summarize --check bench/scan.jsonl
+          # A second run must reuse every result and give the same outcome table.
+          cargo run --locked --features yara -- scan bench/corpus --recursive \
+            --yara-rules rules/aegisguard --yara-cache bench/yara-cache.json \
+            > bench/scan2.jsonl 2> bench/cache.txt
+          grep " 0 misses" bench/cache.txt
+          cargo run -q --locked --example bench_corpus -- summarize bench/scan.jsonl > bench/a.md
+          cargo run -q --locked --example bench_corpus -- summarize bench/scan2.jsonl > bench/b.md
+          diff bench/a.md bench/b.md
 
   ui:
     # egui/eframe desktop UI (workspace member apps/aegis-ui, needs Rust >= 1.95).

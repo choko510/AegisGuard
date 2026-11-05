@@ -490,13 +490,33 @@ fn blank(c: char) -> char {
 /// tracked so `#` or `//` inside string literals are not comments.
 /// Unterminated block comments stay code, so nothing is hidden by them.
 fn split_comments(text: &str, lang: Lang) -> (String, String) {
+    let (code, comments, _) = split_comments_with_spans(text, lang);
+    (code, comments)
+}
+
+/// Byte ranges of comments in `text` for a script at `path`, or `None` when
+/// the language has no known comment syntax. Used to tell whether a raw-text
+/// match lies only inside comments.
+pub fn comment_spans(text: &str, path: &str) -> Option<Vec<(usize, usize)>> {
+    let lang = Lang::from_path(&path.to_ascii_lowercase());
     if lang == Lang::Other {
-        return (text.to_owned(), String::new());
+        return None;
+    }
+    Some(split_comments_with_spans(text, lang).2)
+}
+
+fn split_comments_with_spans(text: &str, lang: Lang) -> (String, String, Vec<(usize, usize)>) {
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    if lang == Lang::Other {
+        return (text.to_owned(), String::new(), spans);
     }
     let mut code = String::with_capacity(text.len());
     let mut comments = String::new();
     if matches!(lang, Lang::Batch | Lang::Vbs) {
+        let mut offset = 0;
         for line in text.split_inclusive('\n') {
+            let line_start = offset;
+            offset += line.len();
             let trimmed = line.trim_start().to_ascii_lowercase();
             let is_comment = match lang {
                 Lang::Batch => {
@@ -510,13 +530,20 @@ fn split_comments(text: &str, lang: Lang) -> (String, String) {
             if is_comment {
                 comments.push_str(line);
                 code.extend(line.chars().map(blank));
+                spans.push((line_start, line_start + line.trim_end().len()));
             } else {
                 code.push_str(line);
             }
         }
-        return (code, comments);
+        return (code, comments, spans);
     }
     let chars: Vec<char> = text.chars().collect();
+    // Byte offset of each char index (plus the end).
+    let byte_at: Vec<usize> = text
+        .char_indices()
+        .map(|(b, _)| b)
+        .chain(std::iter::once(text.len()))
+        .collect();
     let (line_start, block_start, block_end): (&[char], &[char], &[char]) = match lang {
         Lang::PowerShell => (&['#'], &['<', '#'], &['#', '>']),
         Lang::JavaScript => (&['/', '/'], &['/', '*'], &['*', '/']),
@@ -554,17 +581,20 @@ fn split_comments(text: &str, lang: Lang) -> (String, String) {
                     code.push(blank(ch));
                 }
                 comments.push('\n');
+                spans.push((byte_at[i], byte_at[end]));
                 i = end;
                 continue;
             }
         }
         if at(i, line_start) {
+            let start = i;
             while i < chars.len() && chars[i] != '\n' {
                 comments.push(chars[i]);
                 code.push(' ');
                 i += 1;
             }
             comments.push('\n');
+            spans.push((byte_at[start], byte_at[i]));
             continue;
         }
         if c == '"' || c == '\'' || (c == '`' && lang == Lang::JavaScript) {
@@ -573,7 +603,7 @@ fn split_comments(text: &str, lang: Lang) -> (String, String) {
         code.push(c);
         i += 1;
     }
-    (code, comments)
+    (code, comments, spans)
 }
 
 const MAX_STATEMENTS: usize = 200_000;
@@ -1258,6 +1288,26 @@ mod tests {
         assert!(has(&r, "defense_evasion"));
         let blank = blank_ps_strings("'\u{00e9}\u{3042}' + \"\u{1F600}\"");
         assert_eq!(blank.len(), "'\u{00e9}\u{3042}' + \"\u{1F600}\"".len());
+    }
+
+    #[test]
+    fn comment_spans_are_byte_ranges_of_the_original_text() {
+        let text = "x = 1 # \u{00e9}t\u{00e9} Add-MpPreference -ExclusionPath\ny = '#not'\n";
+        let spans = comment_spans(text, "a.py").unwrap();
+        assert_eq!(spans.len(), 1);
+        let (s, e) = spans[0];
+        assert!(text[s..e].starts_with("# "));
+        assert!(text[s..e].ends_with("-ExclusionPath"));
+        let ps = "<# Add-MpPreference -ExclusionPath #>\nGet-Date";
+        let spans = comment_spans(ps, "a.ps1").unwrap();
+        assert_eq!(
+            &ps[spans[0].0..spans[0].1],
+            "<# Add-MpPreference -ExclusionPath #>"
+        );
+        let bat = "@echo off\nrem Add-MpPreference -ExclusionPath\n";
+        let spans = comment_spans(bat, "a.bat").unwrap();
+        assert!(bat[spans[0].0..spans[0].1].starts_with("rem "));
+        assert!(comment_spans("x", "a.hta").is_none());
     }
 
     #[test]

@@ -27,6 +27,7 @@ pub mod model;
 pub mod pe;
 pub mod policy;
 pub mod report;
+pub mod result_cache;
 pub mod rulepack;
 pub mod rules;
 pub mod scan;

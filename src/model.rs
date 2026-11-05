@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// JSONL report schema. v1 had no `schema_version` field; v2 only adds fields
@@ -101,7 +101,7 @@ impl FileIdentity {
 }
 
 /// One YARA rule match on one analyzed layer. Matched bytes are never stored.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct YaraMatch {
     pub rule: String,
     pub namespace: String,
@@ -113,10 +113,14 @@ pub struct YaraMatch {
     /// (offset, length) pairs within the layer, capped; the rest is counted.
     pub offsets: Vec<(usize, usize)>,
     pub omitted_offsets: usize,
+    /// Every recorded offset lies inside a comment of the script (raw layer
+    /// only). Comments are not executed, so this is weak evidence.
+    #[serde(default)]
+    pub in_comment_only: bool,
 }
 
 /// Present only when YARA scanning was requested for this run.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct YaraSummary {
     pub ruleset_sha256: String,
     pub layers_scanned: usize,

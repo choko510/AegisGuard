@@ -6,7 +6,8 @@ use super::process::{ProcessRecord, ProcessTable};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-pub const RULESET_VERSION: u32 = 1;
+/// 2: browser-hijack rules AG-B001..AG-B005 (P6-03).
+pub const RULESET_VERSION: u32 = 2;
 
 const OFFICE_APPS: &[&str] = &[
     "winword.exe",
@@ -108,6 +109,7 @@ pub fn correlate(table: &ProcessTable, ioc_sources: &dyn Fn(&str) -> Vec<String>
     ];
     let mut rules = rules;
     rules.extend(credential_rule_status(table));
+    rules.extend(super::browser_rules::rule_status(table));
 
     let mut findings = Vec::new();
     let processes: Vec<&ProcessRecord> = table.processes.values().collect();
@@ -199,6 +201,7 @@ pub fn correlate(table: &ProcessTable, ioc_sources: &dyn Fn(&str) -> Vec<String>
         }
     }
     credential_theft_signs(table, &mut findings);
+    super::browser_rules::evaluate(table, &mut findings);
     findings.sort_by(|a, b| (a.rule_id, &a.process_key).cmp(&(b.rule_id, &b.process_key)));
     Correlation {
         ruleset_version: RULESET_VERSION,

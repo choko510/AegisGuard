@@ -65,9 +65,84 @@ const KEPT_FIELDS: &[&str] = &[
     "Process Name",
     "Old Value",
     "New Value",
+    // Sysmon 14 (registry key/value rename): the new key path.
+    "NewName",
 ];
 /// Fields kept only as a SHA-256 digest (`<name>_sha256`).
 const HASHED_FIELDS: &[&str] = &["CommandLine", "ParentCommandLine"];
+/// Longest registry value kept as a COM server path.
+const MAX_COM_PATH_CHARS: usize = 1024;
+
+/// Which part of a COM class registration a registry path names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComServerKind {
+    InprocServer32,
+    LocalServer32,
+    TreatAs,
+}
+
+/// Registry scope of a COM registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComScope {
+    /// HKCU / HKU\<SID>: per-user registrations override machine-wide ones.
+    PerUser,
+    Machine,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComKey {
+    /// Upper-case `{GUID}`.
+    pub clsid: String,
+    pub scope: ComScope,
+    pub server: ComServerKind,
+    pub wow64: bool,
+}
+
+/// Parse a Sysmon `TargetObject` such as
+/// `HKU\S-1-5-21-..._Classes\CLSID\{..}\InprocServer32\(Default)` into the
+/// COM registration it touches. Anything else returns `None`.
+pub fn com_key(target_object: &str) -> Option<ComKey> {
+    let lower = target_object.to_ascii_lowercase();
+    let parts: Vec<&str> = lower.split('\\').collect();
+    let clsid_at = parts.iter().position(|p| *p == "clsid")?;
+    let clsid = parts.get(clsid_at + 1)?;
+    if !(clsid.len() == 38 && clsid.starts_with('{') && clsid.ends_with('}')) {
+        return None;
+    }
+    let server = match *parts.get(clsid_at + 2)? {
+        "inprocserver32" => ComServerKind::InprocServer32,
+        "localserver32" => ComServerKind::LocalServer32,
+        "treatas" => ComServerKind::TreatAs,
+        _ => return None,
+    };
+    let hive = parts.first().copied().unwrap_or("");
+    let scope = match hive {
+        "hkcu" | "hkey_current_user" | "hku" | "hkey_users" => ComScope::PerUser,
+        "hklm" | "hkey_local_machine" | "hkcr" | "hkey_classes_root" => ComScope::Machine,
+        _ => return None,
+    };
+    // HKU\.DEFAULT and well-known service SIDs are not interactive users,
+    // but a registration there is still per-user (not machine) scope.
+    Some(ComKey {
+        clsid: clsid.to_ascii_uppercase(),
+        scope,
+        server,
+        wow64: parts[..clsid_at].contains(&"wow6432node"),
+    })
+}
+
+/// Sysmon ID 13 `Details` can hold secrets, so it is never stored as is. For
+/// COM server registrations the value (a DLL/EXE path or a CLSID) is kept as
+/// `Details_com_value`; any other value is kept only as `Details_sha256`.
+fn details_fields(target_object: Option<&str>, details: &str) -> Vec<(String, String)> {
+    let mut out = vec![("Details_sha256".to_string(), sha256_hex(details))];
+    if target_object.and_then(com_key).is_some() && details.chars().count() <= MAX_COM_PATH_CHARS {
+        out.push(("Details_com_value".to_string(), details.to_string()));
+    }
+    out
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EventEnvelope {
@@ -271,8 +346,16 @@ pub fn parse_event_xml(
     };
     let mut payload = BTreeMap::new();
     let mut dropped = 0usize;
+    let target_object = raw
+        .data
+        .iter()
+        .find(|(n, _)| n == "TargetObject")
+        .map(|(_, v)| v.clone());
+    let sysmon_registry = raw.provider == SYSMON_PROVIDER && event_id == 13;
     for (name, value) in raw.data {
-        if KEPT_FIELDS.contains(&name.as_str()) {
+        if sysmon_registry && name == "Details" {
+            payload.extend(details_fields(target_object.as_deref(), &value));
+        } else if KEPT_FIELDS.contains(&name.as_str()) {
             payload.insert(name, clip(value));
         } else if HASHED_FIELDS.contains(&name.as_str()) {
             payload.insert(format!("{name}_sha256"), sha256_hex(&value));
@@ -309,6 +392,63 @@ pub fn parse_event_xml(
         dropped_fields: dropped,
         payload_redacted: payload,
     })
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[test]
+    fn com_keys_are_recognized_in_every_hive_spelling() {
+        let k = com_key(r"HKU\S-1-5-21-1-2-3-1001_Classes\CLSID\{e77cc89b-7401-4c04-8ced-149db35add04}\InprocServer32\(Default)").unwrap();
+        assert_eq!(k.clsid, "{E77CC89B-7401-4C04-8CED-149DB35ADD04}");
+        assert_eq!(k.scope, ComScope::PerUser);
+        assert_eq!(k.server, ComServerKind::InprocServer32);
+        let m = com_key(r"HKLM\SOFTWARE\Classes\WOW6432Node\CLSID\{00000000-0000-0000-0000-000000000001}\LocalServer32").unwrap();
+        assert_eq!(m.scope, ComScope::Machine);
+        assert!(m.wow64);
+        assert!(com_key(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run\x").is_none());
+        assert!(com_key(r"HKCU\Software\Classes\CLSID\notaguid\InprocServer32").is_none());
+    }
+
+    #[test]
+    fn registry_details_are_kept_only_for_com_servers() {
+        let com = fixtures::sysmon(
+            13,
+            1,
+            "2026-11-05T10:00:00Z",
+            &[
+                (
+                    "TargetObject",
+                    r"HKU\S-1-5-21-1_Classes\CLSID\{E77CC89B-7401-4C04-8CED-149DB35ADD04}\InprocServer32\(Default)",
+                ),
+                ("Details", r"C:\Users\u\AppData\Local\x.dll"),
+            ],
+        );
+        let e = parse_event_xml(&com, "x", 0).unwrap();
+        assert_eq!(
+            e.field("Details_com_value"),
+            Some(r"C:\Users\u\AppData\Local\x.dll")
+        );
+        assert!(e.field("Details").is_none());
+
+        let secret = fixtures::sysmon(
+            13,
+            2,
+            "2026-11-05T10:00:00Z",
+            &[
+                ("TargetObject", r"HKCU\Software\App\Token"),
+                ("Details", "AEGIS-SYNTHETIC-SECRET-0000"),
+            ],
+        );
+        let e = parse_event_xml(&secret, "x", 0).unwrap();
+        assert!(e.field("Details_com_value").is_none());
+        assert!(e.field("Details").is_none());
+        assert_eq!(e.field("Details_sha256").map(str::len), Some(64));
+        assert!(!serde_json::to_string(&e)
+            .unwrap()
+            .contains("AEGIS-SYNTHETIC-SECRET"));
+    }
 }
 
 #[cfg(test)]

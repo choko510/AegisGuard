@@ -15,6 +15,9 @@ pub const PROCESS_TERMINATE: u32 = 5;
 pub const IMAGE_LOAD: u32 = 7;
 pub const PROCESS_ACCESS: u32 = 10;
 pub const FILE_CREATE: u32 = 11;
+pub const REGISTRY_OBJECT: u32 = 12;
+pub const REGISTRY_VALUE_SET: u32 = 13;
+pub const REGISTRY_RENAME: u32 = 14;
 pub const DNS_QUERY: u32 = 22;
 pub const DEFENDER_PROVIDER: &str = "Microsoft-Windows-Windows Defender";
 /// Defender Operational: malware detected / action taken.
@@ -52,9 +55,51 @@ pub struct ProcessRecord {
     pub contacts: Vec<Contact>,
     pub omitted_contacts: usize,
     pub image_loads: u64,
+    /// Sysmon ID 7 details (capped at MAX_REFS; `image_loads` counts all).
+    pub loaded_images: Vec<ImageLoad>,
     pub accesses: Vec<Access>,
     pub created_files: Vec<FileCreate>,
+    pub omitted_created_files: usize,
+    /// Sysmon ID 12/13/14 changes made by this process (capped).
+    pub registry_changes: Vec<RegistryChange>,
+    pub omitted_registry_changes: usize,
     pub event_uids: Vec<String>,
+}
+
+/// Sysmon ID 7: this process loaded a module.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ImageLoad {
+    pub path: String,
+    /// Lower-case path for joins with file and registry evidence.
+    pub path_key: String,
+    pub signed: Option<bool>,
+    pub signature: Option<String>,
+    pub signature_status: Option<String>,
+    pub hashes: Option<String>,
+    pub at_unix_ms: Option<i64>,
+    pub event_uid: String,
+}
+
+/// Sysmon ID 12/13/14: a registry change. Values are never stored except a
+/// COM server path (`com_value`); other values are only a digest.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RegistryChange {
+    /// `create_key`, `delete_key`, `set_value`, `delete_value` or `rename`.
+    pub kind: String,
+    pub target_object: String,
+    pub com: Option<super::ComKey>,
+    pub com_value: Option<String>,
+    pub details_sha256: Option<String>,
+    pub new_name: Option<String>,
+    pub at_unix_ms: Option<i64>,
+    pub event_uid: String,
+}
+
+/// Lower-case, `\\?\`-free, backslash path used to join evidence by path.
+pub fn path_key(path: &str) -> String {
+    let p = path.trim().trim_matches('"');
+    let p = p.strip_prefix(r"\\?\").unwrap_or(p);
+    p.replace('/', "\\").to_lowercase()
 }
 
 /// Sysmon ID 10: this process opened another process.
@@ -70,6 +115,7 @@ pub struct Access {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FileCreate {
     pub path: String,
+    pub path_key: String,
     pub at_unix_ms: Option<i64>,
     pub event_uid: String,
 }
@@ -215,7 +261,52 @@ impl ProcessTable {
                     record.omitted_contacts += 1;
                 }
             }
-            IMAGE_LOAD => record.image_loads += 1,
+            IMAGE_LOAD => {
+                record.image_loads += 1;
+                if let Some(path) = e.field_owned("ImageLoaded") {
+                    if record.loaded_images.len() < MAX_REFS {
+                        record.loaded_images.push(ImageLoad {
+                            path_key: path_key(&path),
+                            path,
+                            signed: e
+                                .field_owned("Signed")
+                                .map(|s| s.eq_ignore_ascii_case("true")),
+                            signature: e.field_owned("Signature"),
+                            signature_status: e.field_owned("SignatureStatus"),
+                            hashes: e.artifact_hash.clone(),
+                            at_unix_ms: e.occurred_at_unix_ms,
+                            event_uid: e.event_uid.clone(),
+                        });
+                    }
+                }
+            }
+            REGISTRY_OBJECT | REGISTRY_VALUE_SET | REGISTRY_RENAME => {
+                let Some(target) = e.field_owned("TargetObject") else {
+                    return;
+                };
+                if record.registry_changes.len() >= MAX_REFS {
+                    record.omitted_registry_changes += 1;
+                    return;
+                }
+                let event_type = e.field_owned("EventType").unwrap_or_default();
+                let kind = match (e.event_id, event_type.as_str()) {
+                    (REGISTRY_OBJECT, "DeleteKey") => "delete_key",
+                    (REGISTRY_OBJECT, "DeleteValue") => "delete_value",
+                    (REGISTRY_OBJECT, _) => "create_key",
+                    (REGISTRY_VALUE_SET, _) => "set_value",
+                    _ => "rename",
+                };
+                record.registry_changes.push(RegistryChange {
+                    kind: kind.into(),
+                    com: super::com_key(&target),
+                    target_object: target,
+                    com_value: e.field_owned("Details_com_value"),
+                    details_sha256: e.field_owned("Details_sha256"),
+                    new_name: e.field_owned("NewName"),
+                    at_unix_ms: e.occurred_at_unix_ms,
+                    event_uid: e.event_uid.clone(),
+                });
+            }
             PROCESS_ACCESS => {
                 if let Some(target) = e.field_owned("TargetImage") {
                     if record.accesses.len() < MAX_REFS {
@@ -234,10 +325,13 @@ impl ProcessTable {
                 if let Some(path) = e.field_owned("TargetFilename") {
                     if record.created_files.len() < MAX_REFS {
                         record.created_files.push(FileCreate {
+                            path_key: path_key(&path),
                             path,
                             at_unix_ms: e.occurred_at_unix_ms,
                             event_uid: e.event_uid.clone(),
                         });
+                    } else {
+                        record.omitted_created_files += 1;
                     }
                 }
             }
@@ -322,6 +416,9 @@ impl ProcessTable {
             (PROCESS_TERMINATE, "process_terminate"),
             (IMAGE_LOAD, "image_load"),
             (PROCESS_ACCESS, "process_access"),
+            (FILE_CREATE, "file_create"),
+            (REGISTRY_OBJECT, "registry_object"),
+            (REGISTRY_VALUE_SET, "registry_value_set"),
             (DNS_QUERY, "dns_query"),
         ]
         .into_iter()
@@ -561,10 +658,92 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn dll_loads_and_com_registry_changes_keep_their_meaning() {
+        let dll = r"C:\Users\u\AppData\Local\Google\Chrome\User Data\PlatformExperienceHelper\ab\platform_experience_helper.dll";
+        let events = vec![
+            create(
+                1,
+                "2026-11-05T10:00:00Z",
+                "{L}",
+                "10",
+                r"C:\Games\launcher.exe",
+                "explorer.exe",
+            ),
+            ev(
+                FILE_CREATE,
+                2,
+                "2026-11-05T10:00:01Z",
+                &[("ProcessGuid", "{L}"), ("TargetFilename", dll)],
+            ),
+            ev(
+                REGISTRY_VALUE_SET,
+                3,
+                "2026-11-05T10:00:02Z",
+                &[
+                    ("ProcessGuid", "{L}"),
+                    ("EventType", "SetValue"),
+                    (
+                        "TargetObject",
+                        r"HKU\S-1-5-21-1_Classes\CLSID\{E77CC89B-7401-4C04-8CED-149DB35ADD04}\InprocServer32\(Default)",
+                    ),
+                    ("Details", dll),
+                ],
+            ),
+            ev(
+                REGISTRY_OBJECT,
+                4,
+                "2026-11-05T10:00:02Z",
+                &[
+                    ("ProcessGuid", "{L}"),
+                    ("EventType", "DeleteKey"),
+                    ("TargetObject", r"HKU\S-1-5-21-1\Software\Old"),
+                ],
+            ),
+            create(
+                5,
+                "2026-11-05T10:00:03Z",
+                "{B}",
+                "20",
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                "explorer.exe",
+            ),
+            ev(
+                IMAGE_LOAD,
+                6,
+                "2026-11-05T10:00:04Z",
+                &[
+                    ("ProcessGuid", "{B}"),
+                    ("ImageLoaded", &dll.to_uppercase()),
+                    ("Signed", "false"),
+                    ("SignatureStatus", "Unavailable"),
+                ],
+            ),
+        ];
+        let table = ProcessTable::build(&events);
+        let launcher = &table.processes["{L}"];
+        assert_eq!(launcher.created_files[0].path_key, path_key(dll));
+        let set = &launcher.registry_changes[0];
+        assert_eq!(set.kind, "set_value");
+        assert_eq!(
+            set.com.as_ref().unwrap().scope,
+            crate::events::ComScope::PerUser
+        );
+        assert_eq!(set.com_value.as_deref(), Some(dll));
+        assert_eq!(launcher.registry_changes[1].kind, "delete_key");
+        assert!(launcher.registry_changes[1].com.is_none());
+        let browser = &table.processes["{B}"];
+        assert_eq!(browser.image_loads, 1);
+        assert_eq!(browser.loaded_images[0].path_key, path_key(dll));
+        assert_eq!(browser.loaded_images[0].signed, Some(false));
+        assert!(!table.unobserved().contains(&"image_load"));
+        assert!(table.unobserved().contains(&"process_access"));
+    }
+
+    #[test]
     fn no_events_means_everything_is_unobserved() {
         let table = ProcessTable::build(&[]);
         assert!(table.processes.is_empty());
-        assert_eq!(table.unobserved().len(), 6);
+        assert_eq!(table.unobserved().len(), 9);
     }
 
     #[test]

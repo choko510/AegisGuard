@@ -79,14 +79,23 @@ struct Derivations {
 }
 
 impl Derivations {
-    fn new() -> Self { Self { layers: Vec::new(), reasons: Vec::new() } }
+    fn new() -> Self {
+        Self {
+            layers: Vec::new(),
+            reasons: Vec::new(),
+        }
+    }
 
     fn note(&mut self, reason: &'static str) {
-        if !self.reasons.contains(&reason) { self.reasons.push(reason); }
+        if !self.reasons.contains(&reason) {
+            self.reasons.push(reason);
+        }
     }
 
     fn push(&mut self, origin: &str, value: String) {
-        if value.is_empty() { return; }
+        if value.is_empty() {
+            return;
+        }
         if value.len() > MAX_LAYER_BYTES {
             self.note("derived_layer_size_limit");
         } else {
@@ -96,13 +105,26 @@ impl Derivations {
 }
 
 /// Check growth with overflow-safe arithmetic before any replacement allocation.
-fn replace_bounded(input: &str, pattern: &str, replacement: &str, limit: usize) -> Result<Option<String>, ()> {
+fn replace_bounded(
+    input: &str,
+    pattern: &str,
+    replacement: &str,
+    limit: usize,
+) -> Result<Option<String>, ()> {
     let count = input.matches(pattern).count();
-    if count == 0 { return Ok(None); }
+    if count == 0 {
+        return Ok(None);
+    }
     let removed = count.checked_mul(pattern.len()).ok_or(())?;
     let added = count.checked_mul(replacement.len()).ok_or(())?;
-    let size = input.len().checked_sub(removed).and_then(|n| n.checked_add(added)).ok_or(())?;
-    if size > limit { return Err(()); }
+    let size = input
+        .len()
+        .checked_sub(removed)
+        .and_then(|n| n.checked_add(added))
+        .ok_or(())?;
+    if size > limit {
+        return Err(());
+    }
     Ok(Some(input.replace(pattern, replacement)))
 }
 
@@ -195,13 +217,21 @@ fn decode_b64(encoded: &str) -> (Option<String>, bool) {
     if encoded.len() > 8192 || encoded.len() % 4 != 0 {
         return (None, encoded.len() > 8192);
     }
-    let Ok(raw) = STANDARD.decode(encoded) else { return (None, false); };
-    if let Some(source) = looks_like_source(&raw) { return (Some(source), false); }
+    let Ok(raw) = STANDARD.decode(encoded) else {
+        return (None, false);
+    };
+    if let Some(source) = looks_like_source(&raw) {
+        return (Some(source), false);
+    }
     // Only treat compressed content as a relevant candidate when the format is identifiable.
-    let compressed = raw.starts_with(&[0x1f, 0x8b]) ||
-        (raw.len() >= 2 && raw[0] == 0x78 && [0x01, 0x5e, 0x9c, 0xda].contains(&raw[1]));
-    if !compressed { return (None, false); }
-    let Some(expanded) = inflate_bounded(&raw) else { return (None, true); };
+    let compressed = raw.starts_with(&[0x1f, 0x8b])
+        || (raw.len() >= 2 && raw[0] == 0x78 && [0x01, 0x5e, 0x9c, 0xda].contains(&raw[1]));
+    if !compressed {
+        return (None, false);
+    }
+    let Some(expanded) = inflate_bounded(&raw) else {
+        return (None, true);
+    };
     (looks_like_source(&expanded), false)
 }
 
@@ -211,18 +241,30 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
     for caps in PS_ENC.captures_iter(text).take(16) {
         if let Some(encoded) = caps.get(1) {
             let (value, limited) = decode_b64(encoded.as_str());
-            if limited { out.note("encoded_payload_size_limit"); }
-            if let Some(value) = value { out.push("powershell_encoded_command", value); }
+            if limited {
+                out.note("encoded_payload_size_limit");
+            }
+            if let Some(value) = value {
+                out.push("powershell_encoded_command", value);
+            }
         }
     }
     for matched in B64.find_iter(text).take(32) {
         let (value, limited) = decode_b64(matched.as_str());
-        if limited { out.note("encoded_payload_size_limit"); }
-        if matched.len() == 8192 &&
-           text.as_bytes().get(matched.end()).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/') {
+        if limited {
+            out.note("encoded_payload_size_limit");
+        }
+        if matched.len() == 8192
+            && text
+                .as_bytes()
+                .get(matched.end())
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/')
+        {
             out.note("encoded_token_size_limit");
         }
-        if let Some(value) = value { out.push("base64", value); }
+        if let Some(value) = value {
+            out.push("base64", value);
+        }
     }
     for caps in JS_CHARCODE.captures_iter(text).take(16) {
         if let Some(content) = caps.get(1) {
@@ -309,7 +351,9 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
                 if key.len() > 64 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     return None;
                 }
-                if val.len() > 4096 { return None; }
+                if val.len() > 4096 {
+                    return None;
+                }
                 Some((key.to_owned(), val.to_owned()))
             })
             .take(32)
@@ -555,7 +599,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod resource_limit_tests {
     use super::*;
@@ -582,14 +625,20 @@ mod resource_limit_tests {
 
     #[test]
     fn small_batch_variables_still_decode_and_detect() {
-        let r = inspect_sample("set \"X=Add-MpPreference\"\n%X% -ExclusionPath C:\\Temp", "sample.cmd");
+        let r = inspect_sample(
+            "set \"X=Add-MpPreference\"\n%X% -ExclusionPath C:\\Temp",
+            "sample.cmd",
+        );
         assert!(r.signals.iter().any(|s| s.code == "defense_evasion"));
         assert!(r.analysis_complete);
     }
 
     #[test]
     fn large_batch_caret_does_not_allocate_unbounded_derived_copy() {
-        let r = inspect_sample(&format!("^{}", "A".repeat(MAX_LAYER_BYTES + 1)), "sample.cmd");
+        let r = inspect_sample(
+            &format!("^{}", "A".repeat(MAX_LAYER_BYTES + 1)),
+            "sample.cmd",
+        );
         assert_eq!(r.status, "incomplete");
         assert!(r.incomplete_reasons.contains(&"batch_caret_size_limit"));
     }
@@ -607,10 +656,13 @@ mod resource_limit_tests {
 
     #[test]
     fn repeated_obfuscation_layers_hit_cap_with_explicit_warning() {
-        let samples = (0..25).map(|i| {
-            let command = format!("Add-MpPreference -ExclusionPath C:\\Temp{i}");
-            STANDARD.encode(command)
-        }).collect::<Vec<_>>().join(" ");
+        let samples = (0..25)
+            .map(|i| {
+                let command = format!("Add-MpPreference -ExclusionPath C:\\Temp{i}");
+                STANDARD.encode(command)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         let r = inspect_sample(&samples, "many.py");
         assert_eq!(r.status, "incomplete");
         assert!(r.incomplete_reasons.contains(&"max_decoded_layers"));
@@ -620,7 +672,10 @@ mod resource_limit_tests {
     #[test]
     fn bounded_replace_checks_length_before_allocation() {
         assert_eq!(replace_bounded("abc", "%X%", "X", 10), Ok(None));
-        assert_eq!(replace_bounded("%X%", "%X%", "ab", 2), Ok(Some("ab".into())));
+        assert_eq!(
+            replace_bounded("%X%", "%X%", "ab", 2),
+            Ok(Some("ab".into()))
+        );
         assert_eq!(replace_bounded("%X%", "%X%", "abc", 2), Err(()));
     }
 }

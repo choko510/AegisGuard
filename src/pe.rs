@@ -17,10 +17,14 @@ fn entropy(data: &[u8]) -> f64 {
     for byte in data {
         counts[*byte as usize] += 1;
     }
-    counts.into_iter().filter(|c| *c != 0).map(|count| {
-        let p = count as f64 / data.len() as f64;
-        -p * p.log2()
-    }).sum()
+    counts
+        .into_iter()
+        .filter(|c| *c != 0)
+        .map(|count| {
+            let p = count as f64 / data.len() as f64;
+            -p * p.log2()
+        })
+        .sum()
 }
 
 /// Strictly bounded PE structural triage; not Authenticode verification or a disassembler.
@@ -51,11 +55,17 @@ pub fn inspect(data: &[u8], report: &mut Report) {
         report.unavailable("invalid_pe", "Section count outside safe bounds");
         return;
     }
-    let Some(sections) = coff.checked_add(20).and_then(|n| n.checked_add(optional_header_bytes)) else {
+    let Some(sections) = coff
+        .checked_add(20)
+        .and_then(|n| n.checked_add(optional_header_bytes))
+    else {
         report.unavailable("invalid_pe", "Invalid PE section offsets");
         return;
     };
-    let Some(end) = section_count.checked_mul(40).and_then(|n| sections.checked_add(n)) else {
+    let Some(end) = section_count
+        .checked_mul(40)
+        .and_then(|n| sections.checked_add(n))
+    else {
         report.unavailable("invalid_pe", "Invalid PE section table");
         return;
     };
@@ -90,10 +100,20 @@ pub fn inspect(data: &[u8], report: &mut Report) {
         }
     }
     if has_wx {
-        report.add("writable_executable_section", 40, "pe_section", "A section is both writable and executable");
+        report.add(
+            "writable_executable_section",
+            40,
+            "pe_section",
+            "A section is both writable and executable",
+        );
     }
     if high_entropy {
-        report.add("high_section_entropy", 20, "pe_section", "A section has high entropy (packing is possible, not proof of malware)");
+        report.add(
+            "high_section_entropy",
+            20,
+            "pe_section",
+            "A section has high entropy (packing is possible, not proof of malware)",
+        );
     }
 }
 
@@ -123,6 +143,9 @@ mod tests {
         let mut report = Report::new("sample.dll".into(), "pe");
         inspect(&bytes, &mut report);
         report.finish();
-        assert!(report.signals.iter().any(|s| s.code == "writable_executable_section"));
+        assert!(report
+            .signals
+            .iter()
+            .any(|s| s.code == "writable_executable_section"));
     }
 }

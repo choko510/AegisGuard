@@ -1,8 +1,8 @@
+#[cfg(windows)]
+use persistence_audit::mark_partial;
 use persistence_audit::{
     failure_report, inspect_records, DEFAULT_LIMIT, MAX_CAPTURE_BYTES, MAX_LIMIT,
 };
-#[cfg(windows)]
-use persistence_audit::mark_partial;
 use serde_json::Value;
 use std::env;
 use std::fs::File;
@@ -106,7 +106,10 @@ fn read_bounded(path: &str) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader.read_to_end(&mut bytes)?;
     if bytes.len() > MAX_CAPTURE_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "fixture_too_large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "fixture_too_large",
+        ));
     }
     Ok(bytes)
 }

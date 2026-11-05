@@ -13,10 +13,11 @@ Windows 11 target; compatibility with Microsoft Defender. Efficient service-base
 | PE analysis | Bounded headers, W+X and section entropy | Authenticode via Windows API, imports/exports, overlay semantics, packer evidence |
 | rules | Self-authored YARA rules with a provenance ledger, compile gate (warnings are errors), Ed25519-signed packs with replay protection and two-generation rollback | Rule QA corpus, reviewed third-party rules (after per-rule licensing) |
 | IOC feeds | Source registry with license and default flag (Feodo default, C2Intel opt-in), two-generation cache, IocEvidence with expiry, user IOCs/allowlist with mandatory expiry | Domain/URL feeds with confirmed licensing, signed IOC packs |
-| Windows sensor | Read-only Event Log collector (bookmark advanced only after a durable spool write, gaps reported), Sysmon ProcessGuid lifetimes, offline correlation rules, limited FIM (rescan + ReadDirectoryChangesW) | Resident service (P2-05) only if continuous collection is needed |
+| Windows sensor | Read-only Event Log collector (bookmark advanced only after a durable spool write, gaps reported), Sysmon ProcessGuid lifetimes, offline correlation rules, limited FIM (rescan + ReadDirectoryChangesW) | Windows SCM service, bounded continuous Event Log collection, ProcessGuid correlation and narrow browser-related Sysmon 7/11/12-14 sources (P8) |
 | response | Dry-run outbound block planning and approval audit only; **no OS policy is modified** | Windows Firewall owned-rule backend (P3-03) after isolated-VM recovery evidence and explicit approval |
 | Defender | Read-only `Get-MpComputerStatus` / `Get-MpPreference` audit | Defender Operational/ASR event correlation in reports |
-| UI | CLI JSONL and a static, script-free HTML report | Desktop dashboard separate from any privileged service |
+| UI | CLI JSONL and a static, script-free HTML report | egui/eframe desktop app (non-privileged), read-only offline view first; authenticated IPC to Windows service later |
+| Browser integrity | No browser-specific DLL/COM detection; FIM intentionally does not read credential stores | Read-only DLL/CLSID IOC inspection, generic DLL/COM correlation, optional narrow audit metadata for credential-store reads (P6) |
 
 ### Event analysis (planned)
 
@@ -44,6 +45,8 @@ Windows 11 target; compatibility with Microsoft Defender. Efficient service-base
 4. Add lockfile, SBOM, dependency vulnerability auditing, pinned action revisions and signed releases.
 5. Benchmark CPU/memory on common Windows laptops; cap disk and network usage.
 6. Test with Defender enabled, user/admin separation, and controlled rollback/failure injection.
+
+The staged Rust API, browser integrity checks, egui dashboard, Windows service and safety gates are detailed in the [updated implementation roadmap](research/decisions/IMPLEMENTATION_ROADMAP.md#9-最新の到達目標と現状差分2026-11-05). Detection from events is observational; it does not block a write, module load or credential-file read before it occurs.
 
 ## Current scope
 

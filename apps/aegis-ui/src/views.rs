@@ -326,6 +326,54 @@ pub fn home_rows(data: &Dataset, live: &Live, now: u64) -> Vec<StatusRow> {
     ]
 }
 
+/// Browsers covered on the browser protection page (P9-03).
+pub const BROWSERS: [&str; 4] = [
+    "Google Chrome",
+    "Microsoft Edge",
+    "Brave",
+    "Mozilla Firefox",
+];
+
+/// Per-browser coverage: which checks apply, their current result and what
+/// they need. Checks that do not exist for a browser say so explicitly.
+pub fn browser_coverage(data: &Dataset, browser: &str, now: u64) -> Vec<StatusRow> {
+    let shared = browser_rows(data, now);
+    let k2f = if browser == "Google Chrome" {
+        let r = &shared[0];
+        row("既知の痕跡（k2f）", r.status, r.detail.clone())
+    } else {
+        row(
+            "既知の痕跡（k2f）",
+            Status::NotAvailable,
+            "公表されている痕跡はChromeのものだけのため、このブラウザーには該当する確認がありません。",
+        )
+    };
+    let correlation = {
+        let r = &shared[1];
+        row(
+            "DLL配置・COM登録・ブラウザーの読込みの相関",
+            r.status,
+            format!(
+                "このブラウザーのユーザーデータ配下へのDLL作成と、本体による読込みが対象です。{}",
+                r.detail
+            ),
+        )
+    };
+    let credentials = {
+        let r = &shared[2];
+        row("認証情報ファイルの読み取り", r.status, r.detail.clone())
+    };
+    let specific = {
+        let r = &shared[3];
+        row(
+            "ブラウザー固有の設定・拡張の確認",
+            r.status,
+            r.detail.clone(),
+        )
+    };
+    vec![k2f, correlation, credentials, specific]
+}
+
 pub fn browser_rows(data: &Dataset, now: u64) -> Vec<StatusRow> {
     let k2f = match data.latest(DocumentKind::BrowserCheck) {
         None => row(
@@ -833,6 +881,29 @@ mod tests {
         assert!(!network_evaluable(&none));
         assert!(vis[0].contains("「通信なし」ではありません"));
         assert!(vis[1].contains("DoH"));
+    }
+
+    #[test]
+    fn browser_coverage_is_explicit_per_browser() {
+        let d = Dataset::default();
+        for b in BROWSERS {
+            let rows = browser_coverage(&d, b, NOW);
+            assert_eq!(rows.len(), 4);
+            // Without data nothing is reported as clean.
+            assert!(
+                rows.iter()
+                    .all(|r| matches!(r.status, Status::NoData | Status::NotAvailable)),
+                "{b}"
+            );
+        }
+        assert_eq!(
+            browser_coverage(&d, "Mozilla Firefox", NOW)[0].status,
+            Status::NotAvailable
+        );
+        assert_eq!(
+            browser_coverage(&d, "Google Chrome", NOW)[0].status,
+            Status::NoData
+        );
     }
 
     #[test]

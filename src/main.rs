@@ -325,6 +325,16 @@ enum ServiceCommand {
     },
     /// Stop and remove the service entry (data is kept).
     Uninstall,
+    /// Ask the running service (or console instance) over its read-only pipe.
+    Query {
+        /// hello, status or findings
+        #[arg(default_value = "status")]
+        method: String,
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        #[arg(long, default_value_t = 100)]
+        limit: u64,
+    },
     /// Show the SCM state and the service's own state file.
     Status {
         #[arg(long)]
@@ -599,11 +609,20 @@ fn run_service(command: ServiceCommand) -> Result<()> {
             let flag = stop.clone();
             ctrlc::set_handler(move || flag.store(true, std::sync::atomic::Ordering::SeqCst))?;
             let layout = Layout::new(data_dir);
+            #[cfg(windows)]
+            let mut work = service::WithIpc {
+                inner: service_work(),
+                ipc_error: service::start_ipc(&layout, stop.clone()),
+            };
+            #[cfg(not(windows))]
             let mut work = service_work();
             eprintln!(
                 "AegisGuard service loop in console mode (data: {}); Ctrl-C to stop",
                 layout.data_dir.display()
             );
+            #[cfg(windows)]
+            let state = service::run(&layout, RunMode::Console, &stop, &mut work, &mut || {})?;
+            #[cfg(not(windows))]
             let state = service::run(&layout, RunMode::Console, &stop, work.as_mut(), &mut || {})?;
             print_json(&state)?;
         }
@@ -636,6 +655,24 @@ fn run_service(command: ServiceCommand) -> Result<()> {
             return Err(
                 "the Windows service is only available on Windows; use `service console`".into(),
             );
+        }
+        #[cfg(windows)]
+        ServiceCommand::Query {
+            method,
+            offset,
+            limit,
+        } => {
+            let (response, identity) = service::ipc::request(
+                service::ipc::PIPE_NAME,
+                &method,
+                serde_json::json!({"offset": offset, "limit": limit}),
+                std::time::Duration::from_secs(10),
+            )?;
+            print_json(&serde_json::json!({"server": identity, "response": response}))?;
+        }
+        #[cfg(not(windows))]
+        ServiceCommand::Query { .. } => {
+            return Err("the service pipe is only available on Windows".into());
         }
         ServiceCommand::Status { data_dir } => {
             let data_dir = data_dir.unwrap_or_else(service::default_data_dir);

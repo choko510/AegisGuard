@@ -99,16 +99,23 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
         report(SERVICE_STOPPED, 1, 0);
         return;
     };
-    let mut work = (ctx.make_work)();
-    let result = run(
-        &ctx.layout,
-        RunMode::Service,
-        &STOP,
-        work.as_mut(),
-        &mut || {
-            report(SERVICE_RUNNING, 0, 0);
-        },
-    );
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let ipc_error = super::start_ipc(&ctx.layout, stop.clone());
+    let mut work = super::WithIpc {
+        inner: (ctx.make_work)(),
+        ipc_error,
+    };
+    // Mirror the SCM stop flag into the IPC stop flag.
+    let mirror = stop.clone();
+    std::thread::spawn(move || {
+        while !STOP.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        mirror.store(true, Ordering::SeqCst);
+    });
+    let result = run(&ctx.layout, RunMode::Service, &STOP, &mut work, &mut || {
+        report(SERVICE_RUNNING, 0, 0);
+    });
     let exit = match result {
         Ok(_) => 0,
         Err(e) => {

@@ -12,6 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub mod collect;
+pub mod findings;
+pub mod ipc;
 #[cfg(windows)]
 pub mod scm;
 
@@ -241,6 +243,46 @@ pub struct NoWork;
 
 impl TickWork for NoWork {
     fn tick(&mut self, _state: &mut ServiceState, _data_dir: &Path) {}
+}
+
+/// Wraps tick work and copies the IPC server's failure (if any) into the
+/// state, so a dead IPC endpoint is visible instead of silent.
+pub struct WithIpc {
+    pub inner: Box<dyn TickWork + Send>,
+    pub ipc_error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl TickWork for WithIpc {
+    fn tick(&mut self, state: &mut ServiceState, data_dir: &Path) {
+        self.inner.tick(state, data_dir);
+        state.problems.retain(|p| !p.starts_with("ipc: "));
+        if let Some(e) = self
+            .ipc_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            state.problems.push(format!("ipc: {e}"));
+        }
+    }
+}
+
+/// Start the IPC server thread (Windows); its error is reported via the
+/// returned slot.
+#[cfg(windows)]
+pub fn start_ipc(
+    layout: &Layout,
+    stop: std::sync::Arc<AtomicBool>,
+) -> std::sync::Arc<std::sync::Mutex<Option<String>>> {
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let out = slot.clone();
+    let data_dir = layout.data_dir.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = ipc::serve(Layout::new(data_dir), ipc::PIPE_NAME, stop) {
+            *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+        }
+    });
+    slot
 }
 
 /// Paths used by the service under its data directory.

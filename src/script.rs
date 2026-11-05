@@ -238,7 +238,11 @@ fn decode_b64(encoded: &str) -> (Option<String>, bool) {
 fn derive(text: &str, is_batch: bool) -> Derivations {
     let mut out = Derivations::new();
     // Explicit PowerShell EncodedCommand is generally UTF-16LE.
-    for caps in PS_ENC.captures_iter(text).take(16) {
+    for (index, caps) in PS_ENC.captures_iter(text).enumerate().take(17) {
+        if index == 16 {
+            out.note("candidate_match_limit");
+            break;
+        }
         if let Some(encoded) = caps.get(1) {
             let (value, limited) = decode_b64(encoded.as_str());
             if limited {
@@ -249,7 +253,11 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
             }
         }
     }
-    for matched in B64.find_iter(text).take(32) {
+    for (index, matched) in B64.find_iter(text).enumerate().take(33) {
+        if index == 32 {
+            out.note("candidate_match_limit");
+            break;
+        }
         let (value, limited) = decode_b64(matched.as_str());
         if limited {
             out.note("encoded_payload_size_limit");
@@ -266,7 +274,11 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
             out.push("base64", value);
         }
     }
-    for caps in JS_CHARCODE.captures_iter(text).take(16) {
+    for (index, caps) in JS_CHARCODE.captures_iter(text).enumerate().take(17) {
+        if index == 16 {
+            out.note("candidate_match_limit");
+            break;
+        }
         if let Some(content) = caps.get(1) {
             let numbers: Vec<_> = content.as_str().split(',').map(str::trim).collect();
             if numbers.len() >= 3 && numbers.len() <= 512 {
@@ -280,7 +292,11 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
             }
         }
     }
-    for matched in PY_CHR_CHAIN.find_iter(text).take(16) {
+    for (index, matched) in PY_CHR_CHAIN.find_iter(text).enumerate().take(17) {
+        if index == 16 {
+            out.note("candidate_match_limit");
+            break;
+        }
         let value: Option<String> = PY_CHR
             .captures_iter(matched.as_str())
             .map(|caps| {
@@ -295,7 +311,11 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
             out.push("python_chr", value);
         }
     }
-    for matched in CONCAT.find_iter(text).take(24) {
+    for (index, matched) in CONCAT.find_iter(text).enumerate().take(25) {
+        if index == 24 {
+            out.note("candidate_match_limit");
+            break;
+        }
         let mut joined = String::new();
         for caps in QUOTED.captures_iter(matched.as_str()) {
             let part = caps.get(1).or_else(|| caps.get(2));
@@ -307,12 +327,20 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
             out.push("literal_concat", joined);
         }
     }
-    for caps in JS_REVERSE.captures_iter(text).take(16) {
+    for (index, caps) in JS_REVERSE.captures_iter(text).enumerate().take(17) {
+        if index == 16 {
+            out.note("candidate_match_limit");
+            break;
+        }
         if let Some(value) = caps.get(1).or_else(|| caps.get(2)) {
             out.push("js_reverse", value.as_str().chars().rev().collect());
         }
     }
-    for matched in HEX_ESCAPE.find_iter(text).take(16) {
+    for (index, matched) in HEX_ESCAPE.find_iter(text).enumerate().take(17) {
+        if index == 16 {
+            out.note("candidate_match_limit");
+            break;
+        }
         let bytes: Vec<u8> = matched
             .as_str()
             .as_bytes()
@@ -323,7 +351,11 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
             out.push("hex_escape", value);
         }
     }
-    for matched in UNICODE_ESCAPE.find_iter(text).take(16) {
+    for (index, matched) in UNICODE_ESCAPE.find_iter(text).enumerate().take(17) {
+        if index == 16 {
+            out.note("candidate_match_limit");
+            break;
+        }
         let chars: Option<String> = matched
             .as_str()
             .as_bytes()
@@ -339,7 +371,14 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
     }
     if is_batch {
         // No environment lookups or execution; only literal assignments in the sample.
-        let assignments: Vec<_> = text
+        // A malicious script can bury SET assignments beyond the scan window.
+        if text.lines().skip(512).any(|line| {
+            line.trim().trim_start_matches('@').trim().get(..4)
+                .is_some_and(|p| p.eq_ignore_ascii_case("set "))
+        }) {
+            out.note("batch_assignment_scan_limit");
+        }
+        let mut assignments: Vec<_> = text
             .lines()
             .take(512)
             .filter_map(|line| {
@@ -356,8 +395,12 @@ fn derive(text: &str, is_batch: bool) -> Derivations {
                 }
                 Some((key.to_owned(), val.to_owned()))
             })
-            .take(32)
+            .take(33)
             .collect();
+        if assignments.len() > 32 {
+            out.note("batch_assignment_count_limit");
+            assignments.truncate(32);
+        }
 
         // Previous implementation called String::replace without a preflight:
         // %A% -> thousands of bytes, repeated 32 times, could grow exponentially.
@@ -677,5 +720,44 @@ mod resource_limit_tests {
             Ok(Some("ab".into()))
         );
         assert_eq!(replace_bounded("%X%", "%X%", "abc", 2), Err(()));
+    }
+}
+
+
+#[cfg(test)]
+mod candidate_limit_tests {
+    use super::*;
+    use crate::model::Report;
+
+    #[test]
+    fn omitted_base64_candidates_are_marked_incomplete() {
+        let payload = STANDARD.encode("print('harmless') and words for a long script");
+        let sample = (0..35).map(|_| payload.as_str()).collect::<Vec<_>>().join(" ");
+        let mut report = Report::new("many.py".into(), "script");
+        inspect(sample.as_bytes(), &mut report);
+        report.finish();
+        assert_eq!(report.status, "incomplete");
+        assert!(report.incomplete_reasons.contains(&"candidate_match_limit"));
+    }
+
+    #[test]
+    fn unprocessed_batch_assignments_are_marked_incomplete() {
+        let sample = (0..34)
+            .map(|i| format!("set \"VAL{i}=test\""))
+            .collect::<Vec<_>>().join("\n");
+        let mut report = Report::new("many.cmd".into(), "script");
+        inspect(sample.as_bytes(), &mut report);
+        report.finish();
+        assert!(report.incomplete_reasons.contains(&"batch_assignment_count_limit"));
+        assert_ne!(report.risk, "low_signal");
+    }
+
+    #[test]
+    fn omitted_batch_lines_are_marked_incomplete() {
+        let sample = format!("{}set \"x=A\"\n%x%", "rem no-op\n".repeat(512));
+        let mut report = Report::new("many.bat".into(), "script");
+        inspect(sample.as_bytes(), &mut report);
+        report.finish();
+        assert!(report.incomplete_reasons.contains(&"batch_assignment_scan_limit"));
     }
 }

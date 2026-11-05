@@ -8,7 +8,7 @@ Windows 11 target; compatibility with Microsoft Defender. Efficient service-base
 
 | Unit | Current (2026-11-05) | Target |
 | --- | --- | --- |
-| core / model | Rust CLI modules; JSONL schema v2 with independent completeness (`assessment`) and detection (`signal_level`) axes; handle-based file identity; time/size/file-count budgets | Extract reusable \`aegis-core\` library for reports, limits, rules, score calibration |
+| core / model | `aegisguard` library crate (`src/lib.rs`) with a thin CLI adapter (`src/main.rs`); typed engine operations (`engine`) and a versioned read-side contract (`api`: `ScanReportV2`, `SensorHealth`, `RuleStatus`, `CorrelationFinding`, `SourceFreshness`, `JobProgress`, bounded/cancellable JSONL reading that reports corrupt lines, newer schemas, unknown fields and truncation); JSONL schema v2 with independent completeness (`assessment`) and detection (`signal_level`) axes; handle-based file identity; time/size/file-count budgets | Split into a Cargo workspace (`aegis-core`, service, UI) once the service exists; score calibration |
 | static script | Bounded literal deobfuscation and signatures; optional YARA-X (feature `yara`, no modules) over raw and decoded layers | Language-aware parsers (PowerShell AST/JS AST/Python AST), provenance graph |
 | PE analysis | Bounded headers, W+X and section entropy | Authenticode via Windows API, imports/exports, overlay semantics, packer evidence |
 | rules | Self-authored YARA rules with a provenance ledger, compile gate (warnings are errors), Ed25519-signed packs with replay protection and two-generation rollback | Rule QA corpus, reviewed third-party rules (after per-rule licensing) |

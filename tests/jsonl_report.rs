@@ -503,3 +503,34 @@ fn rule_pack_cannot_be_installed_without_an_engine_to_validate_it() {
     assert!(!dir.join("store").join("rulepack.json").exists());
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// Front ends read CLI output through the library API (P5-01). Every record
+/// the CLI writes must come back complete, with the same axes.
+#[test]
+fn cli_output_reads_back_through_the_typed_api() {
+    use aegisguard::api;
+    let run = scan(&[FIXTURES, "--recursive"]);
+    let out = api::read_scan_jsonl_from(
+        run.stdout.as_bytes(),
+        api::ReadLimits::default(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(out.complete(), "{:?}", out.problems);
+    assert_eq!(out.records.len(), run.reports.len());
+    for (typed, raw) in out.records.iter().zip(&run.reports) {
+        assert_eq!(typed.path, raw["path"].as_str().unwrap());
+        let assessment = serde_json::to_value(typed.assessment()).unwrap();
+        assert_eq!(assessment, raw["assessment"]);
+        let level = serde_json::to_value(typed.signal_level()).unwrap();
+        assert_eq!(level, raw["signal_level"]);
+        assert!(
+            typed.unknown_fields.is_empty(),
+            "{:?}",
+            typed.unknown_fields
+        );
+        if typed.nothing_found() {
+            assert_eq!(raw["risk"], "low_signal");
+        }
+    }
+}

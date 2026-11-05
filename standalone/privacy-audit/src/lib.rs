@@ -770,7 +770,8 @@ mod tests {
     fn duplicate_json_key_cannot_hide_the_first_secret() {
         let input = r#"{"token":"syntheticFIRST12345","token":"[REDACTED]"}"#;
         let result = audit_reader(input.as_bytes(), Mode::Jsonl);
-        assert_eq!(exit_code(&result), 2);
+        assert_eq!(exit_code(&result), 3);
+        assert_eq!(result["warnings"][0], "duplicate_json_key");
         assert!(!result.to_string().contains("syntheticFIRST12345"));
     }
 
@@ -824,6 +825,7 @@ mod tests {
         let result = self_test();
         assert_eq!(result["status"], "complete");
         assert_eq!(result["coverage"]["synthetic_tests_total"], 7);
-        assert!(!result.to_string().contains("synthetic"));
+        assert_eq!(result["entries"].as_array().map(Vec::len), Some(0));
+        assert!(!result.to_string().contains("syntheticSECRET12345"));
     }
 }

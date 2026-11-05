@@ -473,6 +473,45 @@ impl AegisApp {
                 fluent::section(ui, "状態");
                 let icons = [icon::RULES, icon::NETWORK, icon::REALTIME];
                 rows(ui, p, &views::network_rows(&self.data, now), &icons);
+                let visibility = views::network_visibility(&self.data);
+                if !visibility.is_empty() {
+                    fluent::section(ui, "見えていない範囲");
+                    for v in &visibility {
+                        fluent::info_bar(ui, p, Status::Incomplete, "観測の限界", v);
+                        ui.add_space(theme::S4);
+                    }
+                }
+                let findings = views::network_finding_rows(&self.data);
+                fluent::section(ui, "IOCと一致した通信");
+                if findings.is_empty() && !views::network_evaluable(&self.data) {
+                    fluent::settings_card(
+                        ui,
+                        p,
+                        icon::NETWORK,
+                        "評価できません",
+                        "通信（Sysmon ID 3）と名前解決（ID 22）のどちらのイベントも観測されていないため、IOCとの照合ができません。一致が無いことを意味しません。",
+                        Some(if self.data.latest(DocumentKind::IocAttribution).is_some() {
+                            Status::Incomplete
+                        } else {
+                            Status::NoData
+                        }),
+                    );
+                } else if findings.is_empty() {
+                    fluent::settings_card(
+                        ui,
+                        p,
+                        icon::NETWORK,
+                        "一致なし（または未取得）",
+                        "評価できた範囲で、新鮮なIOCと一致した通信はありません。上の「見えていない範囲」は評価できていません。",
+                        Some(if self.data.latest(DocumentKind::IocAttribution).is_some() {
+                            Status::NothingFound
+                        } else {
+                            Status::NoData
+                        }),
+                    );
+                } else {
+                    rows(ui, p, &findings, &[]);
+                }
             }
             Page::Settings => self.settings_page(ui, p, now),
             Page::Scan | Page::History => {}

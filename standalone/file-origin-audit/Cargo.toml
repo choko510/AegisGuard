@@ -1,0 +1,9 @@
+[package]
+name = "file-origin-audit"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Read-only Windows Mark-of-the-Web origin auditor (standalone)"
+publish = false
+
+[dependencies]

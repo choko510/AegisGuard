@@ -309,3 +309,37 @@ fn limits_not_reached_exit_successfully_without_stop_record() {
     let run = scan(&[FIXTURES, "--max-files", "4"]);
     assert!(run.reports.iter().all(|r| r["status"] != "scan_stopped"));
 }
+
+#[test]
+fn output_refuses_unrelated_files_and_rotates_its_own() {
+    let dir = temp_dir("rotation");
+    let foreign = dir.join("notes.txt");
+    fs::write(&foreign, "keep\n").unwrap();
+    let (_, success) = scan_allowing_failure(&[FIXTURES, "--output", foreign.to_str().unwrap()]);
+    assert!(!success);
+    assert_eq!(fs::read_to_string(&foreign).unwrap(), "keep\n");
+
+    let log = dir.join("scan.jsonl");
+    let log_arg = log.to_str().unwrap();
+    for _ in 0..3 {
+        scan(&[
+            FIXTURES,
+            "--output",
+            log_arg,
+            "--output-max-bytes",
+            "4096",
+            "--output-generations",
+            "2",
+        ]);
+    }
+    let rotated = dir.join("scan.jsonl.1");
+    assert!(rotated.exists());
+    assert!(!dir.join("scan.jsonl.3").exists());
+    for file in [&log, &rotated] {
+        for line in fs::read_to_string(file).unwrap().lines() {
+            let report: Value = serde_json::from_str(line).unwrap();
+            assert_v1_compatible(&report);
+        }
+    }
+    fs::remove_dir_all(dir).unwrap();
+}

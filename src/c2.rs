@@ -1,10 +1,10 @@
 //! Read-only defensive C2 indicator feeds with independent freshness per source.
 //! Updates never alter firewall settings or upload local files.
+use crate::store::{self, Generation};
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
-use std::fs;
 use std::io::Read;
 use std::net::IpAddr;
 use std::path::Path;
@@ -12,6 +12,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const CACHE_VERSION: u32 = 2;
 const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+/// Pretty-printed cache of 2 x 50,000 indicators stays well below this.
+const MAX_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_PER_FEED: usize = 50_000;
 const FEED_TTL_SECONDS: u64 = 48 * 3600;
 const FEEDS: [(&str, &str); 2] = [
@@ -150,22 +152,33 @@ fn validate_cache(cache: &Cache) -> Result<()> {
     Ok(())
 }
 
-fn read_cache(path: &Path) -> Result<Cache> {
-    if !path.exists() {
-        return Ok(Cache::default());
-    }
-    if fs::metadata(path)?.len() > MAX_RESPONSE_BYTES {
-        return Err("Local cache exceeds safe size limit".into());
-    }
-    let bytes = fs::read(path)?;
-    let version: serde_json::Value = serde_json::from_slice(&bytes)?;
+fn parse_cache(bytes: &[u8]) -> Result<Cache> {
+    let version: serde_json::Value = serde_json::from_slice(bytes)?;
     let cache = match version.get("version").and_then(|v| v.as_u64()) {
-        Some(1) => migrate_legacy(serde_json::from_slice(&bytes)?)?,
-        Some(2) => serde_json::from_slice(&bytes)?,
+        Some(1) => migrate_legacy(serde_json::from_slice(bytes)?)?,
+        Some(2) => serde_json::from_slice(bytes)?,
         _ => return Err("Unsupported C2 cache version".into()),
     };
     validate_cache(&cache)?;
     Ok(cache)
+}
+
+/// The newest valid cache generation, or an empty cache when none exists.
+/// A broken cache with no valid fallback is an error, never an empty cache.
+fn read_cache(path: &Path) -> Result<(Cache, Option<Generation>)> {
+    let loaded = store::load(path, MAX_CACHE_BYTES, parse_cache)?;
+    if let Some((_, generation)) = &loaded {
+        if *generation != Generation::Current {
+            eprintln!(
+                "warning: C2 cache recovered from the {} generation; the next update repairs it",
+                generation.as_str()
+            );
+        }
+    }
+    Ok(match loaded {
+        Some((cache, generation)) => (cache, Some(generation)),
+        None => (Cache::default(), None),
+    })
 }
 
 fn public_ip(ip: IpAddr) -> bool {
@@ -276,40 +289,15 @@ fn apply_feed(cache: &mut Cache, source: &str, body: &str, now: u64) -> bool {
 
 fn write_cache(path: &Path, cache: &Cache) -> Result<()> {
     validate_cache(cache)?;
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    let bytes = serde_json::to_vec_pretty(cache)?;
+    if bytes.len() as u64 > MAX_CACHE_BYTES {
+        return Err("C2 cache would exceed the safe size limit".into());
     }
-    let temp = path.with_extension("tmp");
-    if temp.exists() {
-        return Err("A previous incomplete cache update exists; resolve it first".into());
-    }
-    fs::write(&temp, serde_json::to_vec_pretty(cache)?)?;
-    if !path.exists() {
-        fs::rename(temp, path)?;
-        return Ok(());
-    }
-    // Preserve a backup of the last-known-good file for Windows portability.
-    let backup = path.with_extension("bak");
-    if backup.exists() {
-        let _ = fs::remove_file(&temp);
-        return Err("A previous cache backup exists; resolve it first".into());
-    }
-    if let Err(e) = fs::rename(path, &backup) {
-        let _ = fs::remove_file(&temp);
-        return Err(e.into());
-    }
-    if let Err(e) = fs::rename(&temp, path) {
-        let _ = fs::rename(&backup, path);
-        return Err(e.into());
-    }
-    let _ = fs::remove_file(backup);
-    Ok(())
+    store::store(path, &bytes, |b| parse_cache(b).map(|_| ()))
 }
 
 pub fn update(path: &Path) -> Result<()> {
-    let mut cache = read_cache(path)?;
+    let (mut cache, _) = read_cache(path)?;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
         .user_agent("AegisGuard/0.1 (defensive IOC consumer)")
@@ -389,7 +377,7 @@ fn source_overview(cache: &Cache, now: u64) -> Vec<serde_json::Value> {
 }
 
 pub fn check(path: &Path, ip: IpAddr) -> Result<()> {
-    let cache = read_cache(path)?;
+    let (cache, generation) = read_cache(path)?;
     let now = epoch();
     let (fresh, stale) = effective_matches(&cache, ip, now);
     println!(
@@ -400,6 +388,7 @@ pub fn check(path: &Path, ip: IpAddr) -> Result<()> {
             "sources": fresh,
             "stale_matches_ignored": stale,
             "feeds": source_overview(&cache, now),
+            "cache_generation": generation.map(Generation::as_str),
             "caution": "Old IP indicators are not considered active. IOC match is not proof of infection.",
         }))?
     );
@@ -407,7 +396,7 @@ pub fn check(path: &Path, ip: IpAddr) -> Result<()> {
 }
 
 pub fn status(path: &Path) -> Result<()> {
-    let cache = read_cache(path)?;
+    let (cache, generation) = read_cache(path)?;
     let now = epoch();
     let feeds = source_overview(&cache, now);
     let any_stale = FEEDS
@@ -421,6 +410,7 @@ pub fn status(path: &Path) -> Result<()> {
             "indicators": cache.entries.len(),
             "saved_at_unix": cache.saved_at,
             "stale": any_stale,
+            "cache_generation": generation.map(Generation::as_str),
             "feeds": feeds,
         }))?
     );
@@ -567,5 +557,82 @@ mod tests {
         let cache = Cache::default();
         assert!(!is_fresh(source_state(&cache, "feodo"), 10_000));
         assert!(!is_fresh(source_state(&cache, "c2intel_verified"), 10_000));
+    }
+
+    fn temp_cache(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("aegisguard-c2-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("c2-cache.json")
+    }
+
+    #[test]
+    fn failed_source_keeps_its_timestamp_across_a_persisted_update() {
+        let path = temp_cache("persist");
+        let mut cache = Cache::default();
+        assert!(apply_feed(&mut cache, "feodo", "1.2.3.4", 1_000));
+        assert!(apply_feed(
+            &mut cache,
+            "c2intel_verified",
+            "5.6.7.8,IOC",
+            1_000
+        ));
+        write_cache(&path, &cache).unwrap();
+        // Next update: feodo succeeds, c2intel returns garbage.
+        let (mut next, _) = read_cache(&path).unwrap();
+        assert!(apply_feed(&mut next, "feodo", "9.9.9.9", 2_000));
+        assert!(!apply_feed(&mut next, "c2intel_verified", "<html>", 2_000));
+        write_cache(&path, &next).unwrap();
+        let (stored, generation) = read_cache(&path).unwrap();
+        assert_eq!(generation, Some(Generation::Current));
+        assert_eq!(
+            source_state(&stored, "feodo").unwrap().last_success_at,
+            2_000
+        );
+        assert_eq!(
+            source_state(&stored, "c2intel_verified")
+                .unwrap()
+                .last_success_at,
+            1_000
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn corrupted_cache_recovers_previous_validated_generation() {
+        let path = temp_cache("corrupt");
+        let mut cache = Cache::default();
+        assert!(apply_feed(&mut cache, "feodo", "1.2.3.4", 1_000));
+        write_cache(&path, &cache).unwrap();
+        assert!(apply_feed(&mut cache, "feodo", "5.6.7.8", 2_000));
+        write_cache(&path, &cache).unwrap();
+        // Simulate a torn write of the current file.
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+        let (recovered, generation) = read_cache(&path).unwrap();
+        assert_eq!(generation, Some(Generation::Previous));
+        assert_eq!(
+            source_state(&recovered, "feodo").unwrap().last_success_at,
+            1_000
+        );
+        // Without any valid generation the cache is an error, not an empty list.
+        std::fs::write(store::previous_path(&path), b"{").unwrap();
+        assert!(read_cache(&path).is_err());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn full_size_cache_fits_the_storage_limit() {
+        let mut cache = Cache::default();
+        let body: String = (0..MAX_PER_FEED as u32)
+            .map(|i| {
+                let [a, b, c, d] = (0x0b00_0000u32 + i).to_be_bytes();
+                format!("{a}.{b}.{c}.{d}\n")
+            })
+            .collect();
+        assert!(apply_feed(&mut cache, "feodo", &body, 1_000));
+        assert!(apply_feed(&mut cache, "c2intel_verified", &body, 1_000));
+        let bytes = serde_json::to_vec_pretty(&cache).unwrap();
+        assert!((bytes.len() as u64) < MAX_CACHE_BYTES);
     }
 }

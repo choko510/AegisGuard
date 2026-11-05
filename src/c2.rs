@@ -6,7 +6,7 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -196,6 +196,7 @@ pub fn status(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
 
     #[test]
     fn ignores_nonpublic_and_headers() {

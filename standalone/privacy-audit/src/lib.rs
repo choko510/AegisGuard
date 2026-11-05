@@ -735,7 +735,7 @@ mod tests {
         assert_eq!(json["status"], "complete");
         assert_eq!(json["coverage"]["json_lines"], 1);
         assert!(json["entries"].as_array().unwrap().len() >= 1);
-        let log = audit_reader(b"Authorization: Bearer syntheticTEST12345\n", Mode::Log);
+        let log = audit_reader(&b"Authorization: Bearer syntheticTEST12345\n"[..], Mode::Log);
         assert_eq!(log["coverage"]["log_lines"], 1);
         assert_eq!(exit_code(&log), 2);
     }
@@ -803,7 +803,7 @@ mod tests {
         let huge = "x".repeat(MAX_LINE_BYTES + 5);
         let result = audit_reader(huge.as_bytes(), Mode::Log);
         assert_eq!(result["warnings"][0], "line_limit_exceeded");
-        let bad = audit_reader(b"{\"token\":\"syntheticSECRET12345\"", Mode::Auto);
+        let bad = audit_reader(&b"{\"token\":\"syntheticSECRET12345\""[..], Mode::Auto);
         assert_eq!(bad["warnings"][0], "malformed_json");
         assert_eq!(exit_code(&bad), 3);
         assert!(!bad.to_string().contains("syntheticSECRET"));
@@ -811,8 +811,8 @@ mod tests {
 
     #[test]
     fn empty_and_oversized_tokens_are_not_success() {
-        assert_eq!(exit_code(&audit_reader(b"", Mode::Auto)), 3);
-        assert_eq!(exit_code(&audit_reader(b"  \n\t\n", Mode::Auto)), 3);
+        assert_eq!(exit_code(&audit_reader(&b""[..], Mode::Auto)), 3);
+        assert_eq!(exit_code(&audit_reader(&b"  \n\t\n"[..], Mode::Auto)), 3);
         let token = "A".repeat(MAX_TOKEN_BYTES + 1);
         let result = audit_reader(token.as_bytes(), Mode::Log);
         assert_eq!(exit_code(&result), 3);

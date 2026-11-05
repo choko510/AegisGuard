@@ -134,14 +134,8 @@ unsafe extern "system" {
     fn GetSystemDirectoryW(buffer: *mut u16, buffer_length: u32) -> u32;
 }
 
-fn powershell_path() -> Option<PathBuf> {
-    const MAX_SYSTEM_DIRECTORY_CHARS: usize = 1024;
-    let mut buffer = [0_u16; MAX_SYSTEM_DIRECTORY_CHARS];
-    // SAFETY: The buffer has capacity MAX_SYSTEM_DIRECTORY_CHARS UTF-16 code
-    // units and remains alive during the call. We reject zero/overflow/truncation.
-    let written = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
-    let length = usize::try_from(written).ok()?;
-    if length == 0 || length >= buffer.len() {
+fn powershell_path_from_directory(buffer: &[u16], length: usize) -> Option<PathBuf> {
+    if length == 0 || length >= buffer.len() || buffer[..length].contains(&0) {
         return None;
     }
     let directory = PathBuf::from(OsString::from_wide(&buffer[..length]));
@@ -154,6 +148,20 @@ fn powershell_path() -> Option<PathBuf> {
             .join("v1.0")
             .join("powershell.exe"),
     )
+}
+
+fn powershell_path() -> Option<PathBuf> {
+    // A 32-bit process on 64-bit Windows may be redirected to SysWOW64.
+    // Only the native 64-bit build is supported for live audit.
+    if cfg!(target_pointer_width = "32") {
+        return None;
+    }
+    const MAX_SYSTEM_DIRECTORY_CHARS: usize = 1024;
+    let mut buffer = [0_u16; MAX_SYSTEM_DIRECTORY_CHARS];
+    // SAFETY: The buffer has capacity MAX_SYSTEM_DIRECTORY_CHARS UTF-16 code
+    // units and remains alive during the call. Zero/truncation is rejected.
+    let written = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+    powershell_path_from_directory(&buffer, usize::try_from(written).ok()?)
 }
 
 fn query(script: &'static str) -> Value {
@@ -185,4 +193,48 @@ pub fn collect() -> Value {
     root.insert("device_guard".to_owned(), query(DEVICE_GUARD));
     root.insert("bitlocker".to_owned(), query(BITLOCKER));
     Value::Object(root)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[test]
+    fn rejects_bogus_windows_api_results() {
+        let units: Vec<u16> = std::ffi::OsStr::new(r"C:\Windows\System32")
+            .encode_wide()
+            .collect();
+        assert!(powershell_path_from_directory(&units, 0).is_none());
+        assert!(powershell_path_from_directory(&units, units.len()).is_none());
+        let relative: Vec<u16> = std::ffi::OsStr::new(r"Windows\System32")
+            .encode_wide()
+            .collect();
+        assert!(powershell_path_from_directory(&relative, relative.len() - 1).is_none());
+    }
+
+    #[test]
+    fn rejects_embedded_nul_in_system_directory() {
+        let mut units: Vec<u16> = std::ffi::OsStr::new(r"C:\Windows\System32")
+            .encode_wide()
+            .collect();
+        units[3] = 0;
+        units.push(0);
+        assert!(powershell_path_from_directory(&units, units.len() - 1).is_none());
+    }
+
+    #[test]
+    fn appends_only_fixed_power_shell_location() {
+        let mut units: Vec<u16> = std::ffi::OsStr::new(r"C:\Windows\System32")
+            .encode_wide()
+            .collect();
+        let length = units.len();
+        units.push(0);
+        let expected = std::path::Path::new(r"C:\Windows\System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        assert_eq!(powershell_path_from_directory(&units, length), Some(expected));
+    }
 }

@@ -287,43 +287,44 @@ pub fn probe(path: &Path) -> Evidence {
             stream_name.push(":Zone.Identifier");
             let stream_path = PathBuf::from(stream_name);
             match read_only_stream(&stream_path) {
-                Ok(Some(mut stream)) => {
-                    match get_id(&stream) {
-                        Err(e) => e,
-                        Ok(stream_id) if stream_id != identity => {
-                            Evidence::Error("stream_file_identity_mismatch")
-                        }
-                        Ok(_) => {
-                            let info_before = stream.metadata();
-                            match info_before {
-                                Err(e) => io_error(e),
-                                Ok(before) if before.len() > MAX_STREAM_BYTES as u64 => {
-                                    Evidence::Error("stream_size_limit_exceeded")
-                                }
-                                Ok(before) => {
-                                    let mut bytes = Vec::new();
-                                    let read = (&mut stream)
-                                        .take((MAX_STREAM_BYTES + 1) as u64)
-                                        .read_to_end(&mut bytes);
-                                    match read {
-                                        Err(e) => io_error(e),
-                                        Ok(_) if bytes.len() > MAX_STREAM_BYTES => {
-                                            Evidence::Error("stream_size_limit_exceeded")
-                                        }
-                                        Ok(_) => match stream.metadata() {
-                                            Err(e) => io_error(e),
-                                            Ok(after) if before.len() != after.len()
-                                                || before.modified().ok() != after.modified().ok() => {
-                                                Evidence::Error("stream_changed_during_read")
-                                            }
-                                            Ok(_) => Evidence::Stream(bytes),
-                                        },
+                Ok(Some(mut stream)) => match get_id(&stream) {
+                    Err(e) => e,
+                    Ok(stream_id) if stream_id != identity => {
+                        Evidence::Error("stream_file_identity_mismatch")
+                    }
+                    Ok(_) => {
+                        let info_before = stream.metadata();
+                        match info_before {
+                            Err(e) => io_error(e),
+                            Ok(before) if before.len() > MAX_STREAM_BYTES as u64 => {
+                                Evidence::Error("stream_size_limit_exceeded")
+                            }
+                            Ok(before) => {
+                                let mut bytes = Vec::new();
+                                let read = (&mut stream)
+                                    .take((MAX_STREAM_BYTES + 1) as u64)
+                                    .read_to_end(&mut bytes);
+                                match read {
+                                    Err(e) => io_error(e),
+                                    Ok(_) if bytes.len() > MAX_STREAM_BYTES => {
+                                        Evidence::Error("stream_size_limit_exceeded")
                                     }
+                                    Ok(_) => match stream.metadata() {
+                                        Err(e) => io_error(e),
+                                        Ok(after)
+                                            if before.len() != after.len()
+                                                || before.modified().ok()
+                                                    != after.modified().ok() =>
+                                        {
+                                            Evidence::Error("stream_changed_during_read")
+                                        }
+                                        Ok(_) => Evidence::Stream(bytes),
+                                    },
                                 }
                             }
                         }
                     }
-                }
+                },
                 Ok(None) => Evidence::Absent,
                 Err(e) => e,
             }

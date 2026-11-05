@@ -18,7 +18,7 @@ const RULE_VERSION: u32 = 1;
 const SKEW_MS: i64 = 2 * 60 * 1000;
 
 /// Per-user data roots of browsers (lower-case, backslash form).
-const USER_DATA_ROOTS: &[&str] = &[
+pub(crate) const USER_DATA_ROOTS: &[&str] = &[
     r"\google\chrome\user data\",
     r"\microsoft\edge\user data\",
     r"\bravesoftware\brave-browser\user data\",
@@ -49,7 +49,7 @@ const BROWSER_IMAGES: &[&str] = &[
     "vivaldi.exe",
 ];
 
-fn under(path_key: &str, roots: &[&str]) -> bool {
+pub(crate) fn under(path_key: &str, roots: &[&str]) -> bool {
     roots.iter().any(|r| path_key.contains(r))
 }
 
@@ -61,7 +61,7 @@ fn basename(path: &str) -> String {
 }
 
 /// A browser itself (by name, from its install directory).
-fn is_browser(p: &ProcessRecord) -> bool {
+pub(crate) fn is_browser(p: &ProcessRecord) -> bool {
     p.image.as_deref().is_some_and(|i| {
         let key = path_key(i);
         BROWSER_IMAGES.contains(&basename(i).as_str()) && under(&key, BROWSER_INSTALL_DIRS)
@@ -69,13 +69,13 @@ fn is_browser(p: &ProcessRecord) -> bool {
 }
 
 /// A browser or one of its installers/updaters, judged by install location.
-fn is_browser_component(p: &ProcessRecord) -> bool {
+pub(crate) fn is_browser_component(p: &ProcessRecord) -> bool {
     p.image
         .as_deref()
         .is_some_and(|i| under(&path_key(i), BROWSER_INSTALL_DIRS))
 }
 
-fn user_writable(key: &str) -> bool {
+pub(crate) fn user_writable(key: &str) -> bool {
     key.contains(r"\appdata\")
         || key.contains(r"\users\public\")
         || key.contains(r"\temp\")
@@ -88,7 +88,7 @@ fn is_dll(key: &str) -> bool {
 }
 
 /// A COM value names a module path; strip arguments/quotes conservatively.
-fn com_value_path(value: &str) -> String {
+pub(crate) fn com_value_path(value: &str) -> String {
     let v = value.trim();
     let v = if let Some(rest) = v.strip_prefix('"') {
         rest.split('"').next().unwrap_or(rest)

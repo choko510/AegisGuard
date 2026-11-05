@@ -178,6 +178,14 @@ enum EventsCommand {
         #[command(flatten)]
         iocs: IocArgs,
     },
+    /// Browser-hijack timelines (launcher -> DLL -> COM -> browser load ->
+    /// outbound), built only from observed events.
+    Timeline {
+        #[arg(long, default_value = "data/events/sysmon.jsonl")]
+        spool: Vec<PathBuf>,
+        #[command(flatten)]
+        iocs: IocArgs,
+    },
     /// Attribute IP and DNS IOC evidence to processes, with confidence and
     /// unknown visibility (DoH, VPN, disabled event types) stated.
     Iocs {
@@ -591,6 +599,9 @@ fn main() -> Result<()> {
         Commands::Events {
             command: EventsCommand::Iocs { spool, iocs },
         } => print_json(&engine::analyze_spools(&spool)?.attribute(&iocs.load()?))?,
+        Commands::Events {
+            command: EventsCommand::Timeline { spool, iocs },
+        } => print_json(&engine::analyze_spools(&spool)?.timeline(&iocs.load()?))?,
         Commands::Events {
             command: EventsCommand::Correlate { spool, iocs },
         } => print_json(&engine::analyze_spools(&spool)?.correlate(&iocs.load()?))?,

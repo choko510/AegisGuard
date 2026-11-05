@@ -99,6 +99,18 @@ impl SpoolAnalysis {
         }
     }
 
+    /// Browser-hijack timelines; only fresh IOCs are named.
+    pub fn timeline(&self, iocs: &ioc::IocSet) -> events::timeline::TimelineReport {
+        let active = |ip: &str| {
+            iocs.ip(ip)
+                .into_iter()
+                .filter(ioc::IocEvidence::active)
+                .map(|e| e.source_id)
+                .collect()
+        };
+        events::timeline::build(&self.table, &active)
+    }
+
     pub fn attribute(&self, iocs: &ioc::IocSet) -> IocsOutput {
         IocsOutput {
             bad_lines: self.bad_lines,

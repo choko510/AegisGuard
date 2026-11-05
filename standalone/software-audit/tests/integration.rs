@@ -154,3 +154,40 @@ fn synthetic_negative_cases_have_no_false_candidates() {
     let candidates = report.entries.iter().filter(|m| m.classification == "candidate").count();
     assert_eq!(candidates, 1, "five negative cases must not become candidates");
 }
+
+
+#[test]
+fn unreadable_registry_subkeys_are_counted_and_make_coverage_partial() {
+    let raw = serde_json::json!({
+        "schema_version": 1,
+        "sources": [
+            {"id":"hklm64","status":"complete","skipped":2,
+             "entries":[{"name":"A Safe Program","version":"1.0","publisher":"Example"}]},
+            {"id":"hklm32","status":"complete","entries":[]},
+            {"id":"hkcu64","status":"complete","entries":[]},
+            {"id":"hkcu32","status":"complete","entries":[]}
+        ]
+    });
+    let result = inspect_fixture_bytes(&serde_json::to_vec(&raw).unwrap()).unwrap();
+    assert_eq!(result.status, "partial");
+    assert_eq!(result.coverage.skipped, 2);
+    let src = result.coverage.sources.iter().find(|s| s.id == "hklm64").unwrap();
+    assert_eq!(src.status, "partial");
+    assert_eq!(src.skipped, 2);
+    assert_eq!(result.entries.len(), 1);
+}
+
+#[test]
+fn denied_registry_source_is_not_reclassified_as_success() {
+    let raw = serde_json::json!({
+        "schema_version": 1,
+        "sources": [
+            {"id":"hklm64","status":"permission_denied","skipped":1,"entries":[]}
+        ]
+    });
+    let result = inspect_fixture_bytes(&serde_json::to_vec(&raw).unwrap()).unwrap();
+    let src = result.coverage.sources.iter().find(|s| s.id == "hklm64").unwrap();
+    assert_eq!(src.status, "permission_denied");
+    assert_eq!(result.coverage.skipped, 1);
+    assert_ne!(result.status, "complete");
+}

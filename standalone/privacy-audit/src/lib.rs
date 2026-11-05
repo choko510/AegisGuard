@@ -1,6 +1,7 @@
 //! Standalone, read-only QA of explicitly supplied UTF-8 JSONL or log files.
 //! This is a detector, not a sanitizer: callers must not publish unchecked input.
 use regex::Regex;
+use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -270,6 +271,63 @@ fn safe_account(account: &str) -> bool {
     )
 }
 
+
+// JSON maps must not silently drop an earlier value on duplicate keys.
+// The normal serde_json::Value representation keeps the last key. Fail
+// closed instead of allowing overwritten secrets to produce a clean report.
+struct UniqueKeys;
+
+struct UniqueKeysVisitor;
+
+impl<'de> Deserialize<'de> for UniqueKeys {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(UniqueKeysVisitor)
+    }
+}
+
+impl<'de> Visitor<'de> for UniqueKeysVisitor {
+    type Value = UniqueKeys;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON value without duplicate object keys")
+    }
+
+    fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+        let mut keys = HashSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !keys.insert(key) {
+                return Err(de::Error::custom("duplicate_json_key"));
+            }
+            let _: UniqueKeys = map.next_value()?;
+        }
+        Ok(UniqueKeys)
+    }
+
+    fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<Self::Value, S::Error> {
+        while seq.next_element::<UniqueKeys>()?.is_some() {}
+        Ok(UniqueKeys)
+    }
+
+    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> { Ok(UniqueKeys) }
+    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> { Ok(UniqueKeys) }
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> { Ok(UniqueKeys) }
+    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> { Ok(UniqueKeys) }
+    fn visit_str<E: de::Error>(self, _: &str) -> Result<Self::Value, E> { Ok(UniqueKeys) }
+    fn visit_string<E: de::Error>(self, _: String) -> Result<Self::Value, E> { Ok(UniqueKeys) }
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(UniqueKeys) }
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(UniqueKeys) }
+}
+
+fn reject_duplicate_json_keys(line: &str) -> Result<(), &'static str> {
+    serde_json::from_str::<UniqueKeys>(line).map(|_| ()).map_err(|e| {
+        if e.to_string().contains("duplicate_json_key") {
+            "duplicate_json_key"
+        } else {
+            "malformed_json"
+        }
+    })
+}
+
 struct Inspector {
     entries: Vec<LeakFinding>,
     seen: HashSet<(usize, &'static str)>,
@@ -362,12 +420,19 @@ impl Inspector {
                         return Err("token_limit_exceeded");
                     }
                     self.scan_text(key, line_no)?;
-                    self.visit_json(child, Some(key), depth + 1, line_no)?;
+                    // A secret-bearing parent object/array stays sensitive until a
+                    // more specific secret key overrides it.
+                    let effective_key = if sensitive_field(key).is_some() {
+                        Some(key.as_str())
+                    } else {
+                        parent_key
+                    };
+                    self.visit_json(child, effective_key, depth + 1, line_no)?;
                 }
             }
             Value::Array(items) => {
                 for item in items {
-                    self.visit_json(item, None, depth + 1, line_no)?;
+                    self.visit_json(item, parent_key, depth + 1, line_no)?;
                 }
             }
             Value::String(value) => {
@@ -403,9 +468,12 @@ impl Inspector {
         let json = match mode {
             Mode::Jsonl => true,
             Mode::Log => false,
-            Mode::Auto => line.trim_start().starts_with('{'),
+            Mode::Auto => matches!(line.trim_start().as_bytes().first(), Some(b'{') | Some(b'[')),
         };
         if json {
+            // Duplicate keys (including Unicode-escaped aliases) must not hide
+            // an earlier sensitive value in serde_json::Value's last-wins map.
+            reject_duplicate_json_keys(line)?;
             let parsed: Value =
                 serde_json::from_str(line).map_err(|_| "malformed_json")?;
             if !parsed.is_object() && !parsed.is_array() {

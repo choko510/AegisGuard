@@ -4,6 +4,7 @@ use crate::model::Report;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use flate2::read::{GzDecoder, ZlibDecoder};
 use regex::Regex;
+use sha2::Digest;
 use std::collections::{HashSet, VecDeque};
 use std::io::Read;
 use std::sync::LazyLock;
@@ -50,10 +51,6 @@ fn utf16_decode(bytes: &[u8], little: bool) -> Option<String> {
 }
 
 fn decode_text(bytes: &[u8]) -> Option<String> {
-    if bytes.len() > MAX_LAYER_BYTES && bytes.len() != 4 * 1024 * 1024 {
-        // Root content can be larger than derived layers; see inspect().
-        return None;
-    }
     if bytes.starts_with(&[0xff, 0xfe]) { return utf16_decode(&bytes[2..], true); }
     if bytes.starts_with(&[0xfe, 0xff]) { return utf16_decode(&bytes[2..], false); }
     let sample = &bytes[..bytes.len().min(256)];

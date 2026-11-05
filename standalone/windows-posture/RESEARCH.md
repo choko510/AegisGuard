@@ -42,7 +42,7 @@
 
 ## 4. BitLocker / デバイス暗号化
 
-**採用：** WMI `root\CIMV2\Security\MicrosoftVolumeEncryption\Win32_EncryptableVolume` を**プロパティ照会のみ**で使用。`VolumeType=0`（OSボリューム）を1件だけ採用し、`ProtectionStatus`（0=保護なし、1=保護あり、2=不明）と`ConversionStatus`（0=完全復号、1=完全暗号化、2〜5=処理中/一時停止）を組み合わせる。
+**採用：** `Win32_EncryptableVolume.VolumeType=0` でOSボリュームを1件に絞り、`Invoke-CimMethod` の読み取り専用 `GetProtectionStatus` と `GetConversionStatus -Arguments @{PrecisionFactor=[uint32]0}` の出力を評価する。両方の `ReturnValue=0` と値の存在を要求し、エラー時に古いプロパティ値へはフォールバックしない。`ProtectionStatus`（0=保護なし、1=保護あり、2=不明）と `ConversionStatus`（0=完全復号、1=完全暗号化、2〜5=処理中/一時停止）を組み合わせる。
 
 **判定：** `ProtectionStatus=1`かつ`ConversionStatus=1`だけがenabled。`ProtectionStatus=0`は暗号化されていても保護停止・一時停止の可能性があるのでdisabledと警告。異なる状態が矛盾するとき、0件/複数OSボリューム、status=2、プロパティがない場合はunknown。**ボリュームの非表示/未検査を無暗号と推定しない。**
 
@@ -50,18 +50,29 @@
 - GetProtectionStatus（読取専用、より新しい状態の取得に有用）: https://learn.microsoft.com/en-us/windows/win32/secprov/getprotectionstatus-win32-encryptablevolume
 - GetConversionStatus（読取専用、より新しい状態の取得に有用）: https://learn.microsoft.com/en-us/windows/win32/secprov/getconversionstatus-win32-encryptablevolume
 
-**重要な制約：** プロパティはインスタンス化時点の値のため、暗号化が進む最中の鮮度保証はない。Microsoftは最新状態には上記2メソッドを推奨している。MVPではシークレットを含まないプロパティだけに絞っている。次版で読み取りメソッドを加える場合もエラー・競合・タイムアウトと結果を検証する。デバイス暗号化（Home）/ BitLocker UI（Pro以上）の違いをハードコードせず、実際のプロバイダの状態に従う。
+**重要な制約：** MicrosoftはWMIの `ProtectionStatus` / `ConversionStatus` プロパティをインスタンス生成時点のスナップショットとし、最新値には2メソッドを推奨している。本実装は両メソッドの成功時のみその値を使用し、`ReturnValue`非0・欠損・タイムアウト・矛盾時には有効扱いしない。ただし2メソッドの実行は原子的ではなく、途中の状態変化による矛盾は `unknown` とする。デバイス暗号化（Home）/ BitLocker UI（Pro以上）の違いはハードコードしない。
 
 **不採用：** `Get-BitLockerVolume` や `manage-bde -status` の一括出力、回復キー/`GetKeyProtectors`/`GetKeyProtectorNumericalPassword`などの取得。前者は余計なフィールドやロケール依存があり、後者はシークレット漏出リスクがある。ディスクの識別子・ドライブレターも出力しない。非システム固定ディスクやリムーバブルボリュームは対象外。
 
-## 5. UAC / LSA
+## 5. PowerShell実行パスの信頼境界
+
+**採用：** kernel32.dll の `GetSystemDirectoryW` をRustの `extern "system"` で直接呼び、返された絶対パスに固定文字列 `WindowsPowerShell\v1.0\powershell.exe` を連結する。1024 UTF-16文字のバッファを使用し、APIの0戻り値・切り詰め・埋め込みNUL・相対パスを拒否する。`SystemRoot`、`windir`、`PATH`、fixtureから実行パスを取得しない。32-bitビルドのライブ監査はWOW64リダイレクトを避けるため拒否する。
+
+- Microsoft Learn / GetSystemDirectoryW: https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getsystemdirectoryw
+- Microsoft Learn / WOW64 file system redirector: https://learn.microsoft.com/en-us/windows/win32/winprog64/file-system-redirector
+- Windows PowerShell 5.1の既定位置: https://support.microsoft.com/en-us/servicing/os/windows/docs/2026/10/windows-powershell-5-1
+
+**不採用：** `SystemRoot`や`PATH`による実行ファイル選択、WOW64リダイレクトのグローバルな無効化。Windows APIからのパス取得だけではOSバイナリの署名・ACL・依存モジュール・PowerShellモジュール自動ロードまで保証しない。**特権サービスへ統合する場合は、そのプロセス内で直接PowerShellを呼ばず、制限付きワーカーまたはネイティブWMI/COMへの移植を別途検討すること。**
+
+**Windows 11 x64 実機での確認：未実施。**
+## 6. UAC / LSA
 
 **初期実装しない。** 公式資料にある `HKLM\SYSTEM\CurrentControlSet\Control\Lsa\RunAsPPL` の値はLSA保護を要求する設定だが、UEFI lockや起動後の実際のPPL状態の完全な裏付けにならない。UACの `EnableLUA` もポリシー設定値であり実稼働・プロセストークン昇格との混同がある。read-onlyで確実なランタイム判定が成立するまで「enabled」と断定しない。
 
 - LSA保護の公式設定説明: https://learn.microsoft.com/en-us/windows-server/security/credentials-protection-and-management/configuring-additional-lsa-protection
 - Device Security UI（概要）: https://support.microsoft.com/ja-jp/windows/security/windows-security/device-security-in-the-windows-security-app
 
-## 6. 権限・端末差・失敗の扱い
+## 7. 権限・端末差・失敗の扱い
 
 - **権限**：SecureBoot cmdletとTPM IsReadyは管理者権限が必要。WMI namespace ACL、UAC、CIM provider、Enterprise GPO/MDM、PowerShell実行制限で失敗する。昇格しない。アクセス拒否はpermission_denied、失敗原因が確定しない場合はunknown。
 - **エディション**：Home/Pro/Enterprise/Educationの差だけでunsupportedを確定しない。Homeでデバイス暗号化が利用可能な機種が存在するため、WMI結果を優先。
@@ -69,7 +80,7 @@
 - **プライバシー**：固定スクリプトのみ、出力項目を指定、WMI/PowerShell生エラー出力は捨てる、外部通信なし。Windowsプローブは各10秒、標準出力各8KiB。想定最大4件・約40秒（起動/回収のオーバーヘッドは別）。fixtureは64KiB/サービス配列16件。予期しない値は安全扱いしない。
 - **誤判定**：単一スナップショットとCIM providerのキャッシュ、BIOS言語差、管理者不足、起動直後のVBS遷移、BitLocker保護一時停止などにより結果が不確実。未知理由をwarningsに記録する。プローブ取得失敗を「disabled」にマッピングしない。
 
-## 7. 依存関係・ライセンス・ソース調査
+## 8. 依存関係・ライセンス・ソース調査
 
 Rust標準ライブラリに加え、JSONの構文・型の安全な取り扱いのため `serde_json = 1.0.154` のみを直接依存として採用。transitive: serde, serde_core, itoa, memchr, zmij（パッケージ固定は専用Cargo.lock）。serde/serde_json はMIT OR Apache-2.0ライセンス。MicrosoftのAPI仕様を参照して独自の短いPowerShell照会を記述。外部サンプルコード、GPL/AGPLコード、Defender実装をコピーしない。
 
@@ -79,9 +90,9 @@ Rust標準ライブラリに加え、JSONの構文・型の安全な取り扱い
 - Microsoft `Get-CimInstance`パラメータ/timeout: https://learn.microsoft.com/en-us/powershell/module/cimcmdlets/get-ciminstance?view=powershell-5.1
 - `Cargo.lock`チェックサムの基準は同リポジトリ最新mainのルートlockfile（**ファイルは変更していない**）。独立Cargo実行でlockfileの整合を再検証すること。
 
-## 8. 検証実績と未解決
+## 9. 検証実績と未解決
 
-- 合成fixtureとRust unit/integration testsを用意：有効、無効、権限拒否、非対応、欠損、矛盾、重複、エディション差、匿名化、サイズ上限、CLI不正入力、Unix実行タイムアウト。
+- 合成fixtureとRust unit/integration testsを用意：有効、無効、権限拒否、非対応、欠損、矛盾、重複、エディション差、匿名化、サイズ上限、CLI不正入力、Unix実行タイムアウト。追加テストコード：BitLockerメソッド失敗/欠損/矛盾とWindows APIパスの不正応答。
 - **この環境にはcargo/rustc/rustfmtがなく、ネットワークからのインストールも不可**：`cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` / `cargo test` / `cargo build --release`は**未実行・未確認**。ソースのGitHub登録は実施。CIに本パッケージの追加はしていない（共通ルールで禁止）。
 - Windows 11実機・通常ユーザー/管理者/Domain・MDM管理下・Home/Pro・UEFI/Legacy・fTPM/仮想TPM・BitLocker暗号化途中・VM/RDP、32-bit/64-bitの照会と所要時間は**未検証**。
-- 今後：Windows 11テスト環境で各プローブの出力型/昇格失敗/ロケールを確認。BitLocker最新状態の読み取りメソッド導入の是非。TPM IsReady権限不足の詳細判定。Cargo lock/fmt/clippy/testを実際に実行し、P5 typed read-side adapterへ統合する専用PRを後日検討。
+- 今後：Windows 11テスト環境で各プローブの出力型/昇格失敗/ロケールを確認。BitLockerの2メソッドの戻り値・権限拒否・状態遷移中の整合性を実測。TPM IsReady権限不足の詳細判定。Cargo lock/fmt/clippy/testを実際に実行し、P5 typed read-side adapterへ統合する専用PRを後日検討。

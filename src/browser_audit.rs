@@ -153,13 +153,19 @@ pub struct BrowserAudit {
     pub explanation: &'static str,
 }
 
+/// Join a backslash-separated relative path component by component (so the
+/// same tables work on any platform's path type).
+fn join_rel(base: &Path, rel: &str) -> PathBuf {
+    rel.split('\\').fold(base.to_path_buf(), |p, c| p.join(c))
+}
+
 fn user_data_dir(spec: &BrowserSpec, roots: &Roots) -> Option<PathBuf> {
     let base = if spec.roaming {
         roots.app_data.as_ref()
     } else {
         roots.local_app_data.as_ref()
     }?;
-    Some(base.join(spec.user_data))
+    Some(join_rel(base, spec.user_data))
 }
 
 fn installed(spec: &BrowserSpec, roots: &Roots) -> bool {
@@ -168,7 +174,7 @@ fn installed(spec: &BrowserSpec, roots: &Roots) -> bool {
             .program_files
             .iter()
             .chain(roots.local_app_data.iter())
-            .any(|root| root.join(rel).is_file())
+            .any(|root| join_rel(root, rel).is_file())
     })
 }
 
@@ -204,10 +210,10 @@ pub fn audit(roots: &Roots, registry: &dyn RegistryView) -> BrowserAudit {
             None => (None, None),
         };
         let firefox_policies = (spec.name == "Mozilla Firefox").then(|| {
-            roots.program_files.iter().any(|p| {
-                p.join(r"Mozilla Firefox\distribution\policies.json")
-                    .is_file()
-            })
+            roots
+                .program_files
+                .iter()
+                .any(|p| join_rel(p, r"Mozilla Firefox\distribution\policies.json").is_file())
         });
         let forced = hkcu.unwrap_or(0) + hklm.unwrap_or(0) > 0 || firefox_policies == Some(true);
         if forced {

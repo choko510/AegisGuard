@@ -10,6 +10,7 @@ const KEY_QUERY_VALUE: u32 = 0x0001;
 const VIEW_64: u32 = 0x0100;
 const VIEW_32: u32 = 0x0200;
 const REG_SZ: u32 = 1;
+const REG_EXPAND_SZ: u32 = 2;
 const SUCCESS: i32 = 0;
 const FILE_NOT_FOUND: i32 = 2;
 const ACCESS_DENIED: i32 = 5;
@@ -41,30 +42,33 @@ fn open(root: Hkey, path: &str, access: u32) -> Result<Key, i32> {
     let code = unsafe { RegOpenKeyExW(root, wide(path).as_ptr(), 0, access, &mut handle) };
     if code == SUCCESS && !handle.is_null() { Ok(Key(handle)) } else { Err(code) }
 }
-fn text(key: &Key, value_name: &str) -> Result<Option<String>, ()> {
+fn text(key: &Key, value_name: &str) -> Result<Option<String>, &'static str> {
     let name = wide(value_name);
     let mut kind = 0u32;
     let mut size = 0u32;
     // SAFETY: name is null terminated, null buffer requests the byte count.
     let code = unsafe { RegQueryValueExW(key.0, name.as_ptr(), ptr::null_mut(), &mut kind, ptr::null_mut(), &mut size) };
     if code == FILE_NOT_FOUND { return Ok(None); }
-    if code != SUCCESS { return Err(()); }
-    if kind != REG_SZ { return Ok(None); }
-    if size == 0 || size > MAX_VALUE_BYTES || size % 2 != 0 { return Err(()); }
+    if code != SUCCESS { return Err("value_read_failed"); }
+    // REG_EXPAND_SZ contains an unexpanded string. Never execute or expand
+    // environment variables from an untrusted Uninstall entry.
+    if kind != REG_SZ && kind != REG_EXPAND_SZ { return Err("unsupported_value_type"); }
+    if size == 0 || size > MAX_VALUE_BYTES || size % 2 != 0 { return Err("invalid_value_size"); }
     let mut buffer = vec![0u16; size as usize / 2 + 1];
     let mut written = size;
     // SAFETY: buffer has at least size bytes, API writes at most written bytes.
     let code = unsafe { RegQueryValueExW(key.0, name.as_ptr(), ptr::null_mut(), &mut kind,
         buffer.as_mut_ptr().cast(), &mut written) };
-    if code != SUCCESS || kind != REG_SZ || written == 0 || written > size || written % 2 != 0 {
-        return Err(());
+    if code != SUCCESS || (kind != REG_SZ && kind != REG_EXPAND_SZ)
+        || written == 0 || written > size || written % 2 != 0 {
+        return Err("value_changed_or_invalid");
     }
     let units = &buffer[..written as usize / 2];
     let end = units.iter().position(|&c| c == 0).unwrap_or(units.len());
-    String::from_utf16(&units[..end]).map(Some).map_err(|_| ())
+    String::from_utf16(&units[..end]).map(Some).map_err(|_| "invalid_utf16")
 }
 fn collect_source(id: &str, root: Hkey, view: u32) -> SourceData {
-    let mut data = SourceData { id: id.into(), status: "complete".into(), entries: Vec::new() };
+    let mut data = SourceData { id: id.into(), status: "complete".into(), entries: Vec::new(), skipped: 0 };
     let parent = match open(root, UNINSTALL, KEY_READ | view) {
         Ok(key) => key,
         Err(FILE_NOT_FOUND) => return data,
@@ -89,12 +93,17 @@ fn collect_source(id: &str, root: Hkey, view: u32) -> SourceData {
         };
         let name = match text(&child, "DisplayName") {
             Ok(Some(s)) if !s.trim().is_empty() => s,
-            Ok(_) => continue,
-            Err(()) => { data.status = "partial".into(); continue; }
+            Ok(_) | Err(_) => {
+                // Registered subkey exists but could not supply a usable name.
+                // It must not silently disappear from the coverage report.
+                data.skipped += 1;
+                data.status = "partial".into();
+                continue;
+            }
         };
         let version = match text(&child, "DisplayVersion") {
             Ok(v) => v,
-            Err(()) => { data.status = "partial".into(); None }
+            Err(_) => { data.status = "partial".into(); None }
         };
         let publisher = match text(&child, "Publisher") {
             Ok(v) => v,

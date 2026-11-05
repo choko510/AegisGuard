@@ -13,8 +13,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_PER_FEED: usize = 50_000;
 const FEEDS: [(&str, &str); 2] = [
-    ("feodo", "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt"),
-    ("c2intel_verified", "https://raw.githubusercontent.com/drb-ra/C2IntelFeeds/master/feeds/IPC2s.csv"),
+    (
+        "feodo",
+        "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt",
+    ),
+    (
+        "c2intel_verified",
+        "https://raw.githubusercontent.com/drb-ra/C2IntelFeeds/master/feeds/IPC2s.csv",
+    ),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,16 +39,25 @@ struct Cache {
 
 impl Default for Cache {
     fn default() -> Self {
-        Self { version: 1, saved_at: 0, entries: vec![] }
+        Self {
+            version: 1,
+            saved_at: 0,
+            entries: vec![],
+        }
     }
 }
 
 fn epoch() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn read_cache(path: &Path) -> Result<Cache> {
-    if !path.exists() { return Ok(Cache::default()); }
+    if !path.exists() {
+        return Ok(Cache::default());
+    }
     let metadata = fs::metadata(path)?;
     if metadata.len() > MAX_RESPONSE_BYTES {
         return Err("Local cache exceeds safe size limit".into());
@@ -57,22 +72,35 @@ fn read_cache(path: &Path) -> Result<Cache> {
 fn public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
-            let [a,b,c,_] = ip.octets();
-            !(ip.is_private() || ip.is_loopback() || ip.is_link_local()
-                || ip.is_broadcast() || ip.is_multicast() || ip.is_unspecified()
-                || ip.is_documentation() || a == 0 || a >= 240
+            let [a, b, c, _] = ip.octets();
+            !(ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_multicast()
+                || ip.is_unspecified()
+                || ip.is_documentation()
+                || a == 0
+                || a >= 240
                 || (a == 100 && (64..=127).contains(&b))
                 || (a == 198 && (b == 18 || b == 19))
                 || (a == 192 && b == 0 && c == 0))
         }
-        IpAddr::V6(ip) => !(ip.is_loopback() || ip.is_unspecified() || ip.is_multicast()
-            || ip.is_unique_local() || ip.is_unicast_link_local()),
+        IpAddr::V6(ip) => {
+            !(ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local())
+        }
     }
 }
 
 fn parse_indicator(line: &str) -> Option<IpAddr> {
     let line = line.trim();
-    if line.is_empty() || line.starts_with('#') { return None; }
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
     let candidate = line.split(',').next()?.trim().trim_matches('"').trim();
     let addr = candidate.parse::<IpAddr>().ok()?;
     public_ip(addr).then_some(addr)
@@ -90,7 +118,9 @@ fn parse_feed(body: &str) -> Vec<IpAddr> {
 fn fetch(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
     let response = client.get(url).send()?.error_for_status()?;
     let mut bytes = Vec::new();
-    response.take(MAX_RESPONSE_BYTES + 1).read_to_end(&mut bytes)?;
+    response
+        .take(MAX_RESPONSE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_RESPONSE_BYTES {
         return Err("Feed download exceeded maximum response size".into());
     }
@@ -99,7 +129,9 @@ fn fetch(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
 
 fn write_cache(path: &Path, data: &Cache) -> Result<()> {
     if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() { fs::create_dir_all(parent)?; }
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
     }
     // Stage a fully serialized cache before altering the previous version.
     let temp = path.with_extension("tmp");
@@ -149,7 +181,9 @@ pub fn update(path: &Path) -> Result<()> {
                 eprintln!("{source}: loaded {} indicators", ips.len());
                 updated_sources += 1;
             }
-            Err(error) => eprintln!("{source}: update failed ({error}); preserving previous indicators"),
+            Err(error) => {
+                eprintln!("{source}: update failed ({error}); preserving previous indicators")
+            }
         }
     }
     if updated_sources == 0 {
@@ -157,39 +191,48 @@ pub fn update(path: &Path) -> Result<()> {
     }
     cache.saved_at = epoch();
     write_cache(path, &cache)?;
-    println!("{}", serde_json::to_string(&json!({
-        "status": "updated",
-        "sources_updated": updated_sources,
-        "indicators": cache.entries.len(),
-        "cache": path.display().to_string(),
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "status": "updated",
+            "sources_updated": updated_sources,
+            "indicators": cache.entries.len(),
+            "cache": path.display().to_string(),
+        }))?
+    );
     Ok(())
 }
 
 pub fn check(path: &Path, ip: IpAddr) -> Result<()> {
     let cache = read_cache(path)?;
     let matched: Vec<&Indicator> = cache.entries.iter().filter(|i| i.ip == ip).collect();
-    println!("{}", serde_json::to_string(&json!({
-        "ip": ip.to_string(),
-        "matched": !matched.is_empty(),
-        "sources": matched.iter().map(|i| i.source.as_str()).collect::<Vec<_>>(),
-        "cache_updated_at_unix": cache.saved_at,
-        "caution": "IOC match is not proof of infection; absence is not proof of safety",
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "ip": ip.to_string(),
+            "matched": !matched.is_empty(),
+            "sources": matched.iter().map(|i| i.source.as_str()).collect::<Vec<_>>(),
+            "cache_updated_at_unix": cache.saved_at,
+            "caution": "IOC match is not proof of infection; absence is not proof of safety",
+        }))?
+    );
     Ok(())
 }
 
 pub fn status(path: &Path) -> Result<()> {
     let cache = read_cache(path)?;
     let age = epoch().saturating_sub(cache.saved_at);
-    println!("{}", serde_json::to_string(&json!({
-        "cache": path.display().to_string(),
-        "indicators": cache.entries.len(),
-        "saved_at_unix": cache.saved_at,
-        "age_hours": if cache.saved_at == 0 { serde_json::Value::Null }
-                     else { json!(age / 3600) },
-        "stale": cache.saved_at == 0 || age > 48 * 3600,
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "cache": path.display().to_string(),
+            "indicators": cache.entries.len(),
+            "saved_at_unix": cache.saved_at,
+            "age_hours": if cache.saved_at == 0 { serde_json::Value::Null }
+                         else { json!(age / 3600) },
+            "stale": cache.saved_at == 0 || age > 48 * 3600,
+        }))?
+    );
     Ok(())
 }
 
@@ -208,7 +251,13 @@ mod tests {
     #[test]
     fn accepts_and_deduplicates_feodo_and_csv_ip_format() {
         let addresses = parse_feed("1.2.3.4\n1.2.3.4\n5.6.7.8,443\n# comment");
-        assert_eq!(addresses, vec![Ipv4Addr::new(1,2,3,4).into(), Ipv4Addr::new(5,6,7,8).into()]);
+        assert_eq!(
+            addresses,
+            vec![
+                IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
+                IpAddr::V4(Ipv4Addr::new(5, 6, 7, 8))
+            ]
+        );
     }
     #[test]
     fn default_cache_does_not_claim_freshness() {

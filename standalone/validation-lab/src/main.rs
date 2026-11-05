@@ -67,7 +67,9 @@ fn main() {
     match parse() {
         Ok(value) => {
             println!("{value}");
-            if value["status"] != "complete" { std::process::exit(1); }
+            if value["status"] != "complete" {
+                std::process::exit(1);
+            }
         }
         Err(error) => {
             eprintln!("{error}");

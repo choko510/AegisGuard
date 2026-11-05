@@ -76,7 +76,7 @@ fn caps_and_null_coverage_are_explicit() {
 #[test]
 fn duplicate_rule_one_line_is_not_repeated() {
     let result = audit_reader(
-        b"token=syntheticFIRST12345 token=syntheticSECOND12345",
+        &b"token=syntheticFIRST12345 token=syntheticSECOND12345"[..],
         Mode::Log,
     );
     assert_eq!(result["entries"].as_array().unwrap().len(), 1);
@@ -117,7 +117,7 @@ fn permission_denied_is_not_reported_as_clean() {
 
 #[test]
 fn report_has_generated_time_and_no_input_path() {
-    let result = audit_reader(b"normal log line\n", Mode::Log);
+    let result = audit_reader(&b"normal log line\n"[..], Mode::Log);
     assert!(result["generated_at_unix_ms"].as_u64().unwrap() > 1_700_000_000_000);
     assert_eq!(result["schema_version"], 1);
     assert_eq!(result["module"], "privacy-audit");
@@ -175,7 +175,7 @@ fn duplicate_json_keys_fail_closed_even_with_unicode_escapes() {
 
 #[test]
 fn ordinary_json_arrays_remain_clean_when_no_secrets_exist() {
-    let output = audit_reader(br#"[{"items":["hello","world"]},{"ok":true}]"#, Mode::Auto);
+    let output = audit_reader(&br#"[{"items":["hello","world"]},{"ok":true}]"#[..], Mode::Auto);
     assert_eq!(output["status"], "complete");
     assert_eq!(output["coverage"]["json_lines"], 1);
     assert_eq!(exit_code(&output), 0);

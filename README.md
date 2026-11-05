@@ -146,6 +146,20 @@ aegisguard events collect --channel Microsoft-Windows-Sysmon/Operational --spool
 - `aegisguard events processes --spool dataventssysmon.jsonl` はスプールからProcessGuid単位のプロセスの生存期間（作成・終了・通信先・DNS・DLLロード数・アクセス先）を組み立てます。PIDだけでは同一視しません。作成イベントを見ていないプロセスは `start_observed=false`、重複・時刻の逆転・同じPIDの同時生存は `anomalies` に出します。**観測されなかったイベント種別（例：Sysmon ID 3/7/22が無効）は `unobserved` に出し、「通信なし」とは扱いません。**
 - `aegisguard events correlate --spool ... --c2-cache datar-cache.json` は組み込みの相関ルール（AG-C001：Officeアプリがスクリプトホスト等を起動、AG-C002：起動後5分以内に新鮮なC2 IOCへ接続、AG-C003：1分以内に子プロセス10個以上）をオフラインで実行します。結果は確認のための根拠（`review` / `observed`）で、悪性の判定ではありません。必要なイベント種別が観測されていないルールは `evaluable=false` と `missing_sources` で示します。遮断・削除はしません。
 
+### 限定FIM（P2-04、読み取りのみ）
+
+```powershell
+aegisguard fim baseline C:\ProgramData\MyApp\config C:\Users\me\.ssh\config --db data\fim\baseline.json
+aegisguard fim check --db data\fim\baseline.json
+aegisguard fim watch --db data\fim\baseline.json --duration-secs 600   # Windowsのみ
+```
+
+- 明示したパス（ファイル、または深さ8までのフォルダー、最大1万件）だけを対象に、サイズ・更新時刻・ファイル同一性・SHA-256を記録します（2世代保存）。
+- `check` は再走査して、`created` / `modified`（内容変更・別ファイルへの差替え・メタデータ変更）/ `renamed` / `deleted` / `unreadable` を個別に報告します。読めなくなったファイルを「削除」とは扱いません。
+- `watch` はWindowsの変更通知（`ReadDirectoryChangesW`）を使いますが、**判定はすべて再走査**で行います。通知の取りこぼし（バッファあふれ）と監視の停止は `overflow` / `monitor_stopped` として出し、その時点と終了時に再走査します。
+- ブラウザーの認証情報・Cookieのファイル（`Login Data`、`Cookies`、`key4.db`、`logins.json` 等）やレジストリハイブは**開かず**、`excluded_sensitive` として記録だけします。
+- FIMは変更しか見えません。ファイルを読み取って持ち出す行為（変更を伴わないもの）は検出できません。
+
 ### 今後の本番機能
 
 Windowsサービス、ProcessGuid相関、AMSI連携、Authenticode、DNS/ドメインIOC、明示的なWindows Firewallアウトバウンド遮断と安全な巻き戻し、ログローテーション、署名付きルール更新、GUIなどを段階的に追加します。詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。

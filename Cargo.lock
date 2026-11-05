@@ -132,6 +132,7 @@ dependencies = [
  "aegisguard",
  "eframe",
  "flate2",
+ "serde",
  "serde_json",
  "windows-sys 0.61.2",
 ]

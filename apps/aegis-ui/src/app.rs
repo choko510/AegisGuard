@@ -9,8 +9,10 @@
 use crate::data::{self, Dataset, Job, Update};
 use crate::fluent::{self, icon_text};
 use crate::live::{self, Live};
+use crate::notify::{self, Notifier, UiSettings};
 use crate::status::{icon, Status};
 use crate::theme::{self, Accent, Palette};
+use crate::tray::{Tray, TrayEvent};
 use crate::views::{self, StatusRow};
 use aegisguard::api::DocumentKind;
 use eframe::egui::{
@@ -134,6 +136,14 @@ pub struct AegisApp {
     pub live: Live,
     live_rx: Option<std::sync::mpsc::Receiver<Live>>,
     live_enabled: bool,
+    /// Per-user UI settings (P9-04).
+    pub settings: UiSettings,
+    notifier: Notifier,
+    tray: Option<Tray>,
+    tray_wanted: bool,
+    /// New review findings since the window was last looked at.
+    pub unseen: usize,
+    settings_note: Option<String>,
 }
 
 impl AegisApp {
@@ -151,6 +161,75 @@ impl AegisApp {
             live: Live::default(),
             live_rx: None,
             live_enabled: false,
+            settings: UiSettings::default(),
+            notifier: Notifier::default(),
+            tray: None,
+            tray_wanted: false,
+            unseen: 0,
+            settings_note: None,
+        }
+    }
+
+    /// Load saved settings and show the tray icon (interactive runs only).
+    pub fn with_desktop_integration(mut self) -> Self {
+        self.settings = UiSettings::load();
+        self.theme = match self.settings.theme.as_str() {
+            "light" => ThemeChoice::Light,
+            "dark" => ThemeChoice::Dark,
+            _ => ThemeChoice::System,
+        };
+        self.tray_wanted = true;
+        self
+    }
+
+    fn handle_tray(&mut self, ctx: &egui::Context) {
+        if self.tray_wanted && self.tray.is_none() {
+            self.tray_wanted = false;
+            self.tray = Tray::start();
+        }
+        let events: Vec<TrayEvent> = self
+            .tray
+            .as_ref()
+            .map(|t| t.events.try_iter().collect())
+            .unwrap_or_default();
+        for e in events {
+            match e {
+                TrayEvent::Open => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                TrayEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            }
+        }
+        // Title shows unseen findings; looking at the window clears it.
+        if ctx.input(|i| i.focused) && self.unseen > 0 {
+            self.unseen = 0;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title("AegisGuard".into()));
+        }
+    }
+
+    fn notify_new(&mut self, ctx: &egui::Context) {
+        let findings: Vec<serde_json::Value> = self
+            .live
+            .findings
+            .as_ref()
+            .and_then(|f| f["findings"].as_array().cloned())
+            .unwrap_or_default();
+        let fresh = self.notifier.fresh(&findings);
+        if fresh.is_empty() {
+            return;
+        }
+        self.unseen += fresh.len();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "AegisGuard（要確認 {} 件）",
+            self.unseen
+        )));
+        if self.settings.notifications {
+            if let Some(tray) = &self.tray {
+                let (title, text) = notify::message(&fresh);
+                tray.notify(&title, &text, true);
+            }
         }
     }
 
@@ -174,6 +253,7 @@ impl AegisApp {
         if let Some(l) = latest {
             live::merge_into(&mut self.data, &l);
             self.live = l;
+            self.notify_new(ctx);
         }
     }
 
@@ -256,6 +336,7 @@ impl AegisApp {
         }
         self.poll_job();
         self.poll_live(&ctx);
+        self.handle_tray(&ctx);
         self.shortcuts(&ctx);
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -624,6 +705,47 @@ impl AegisApp {
             });
         });
         ui.add_space(theme::S4);
+        theme::card(p).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.add_space(4.0);
+                ui.label(icon_text("\u{EA8F}", 20.0, p.text));
+                ui.add_space(theme::S12);
+                ui.vertical(|ui| {
+                    ui.label("通知");
+                    ui.label(
+                        RichText::new("常駐サービスが新しい「要確認」の所見を出したとき、通知領域に1回だけ表示します")
+                            .size(theme::CAPTION)
+                            .color(p.text_secondary),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.checkbox(&mut self.settings.notifications, "オン");
+                });
+            });
+        });
+        ui.add_space(theme::S4);
+        let wanted_theme = match self.theme {
+            ThemeChoice::System => "system",
+            ThemeChoice::Light => "light",
+            ThemeChoice::Dark => "dark",
+        };
+        if self.settings.theme != wanted_theme {
+            self.settings.theme = wanted_theme.into();
+        }
+        if ui.button("設定を保存").clicked() {
+            self.settings_note = Some(match self.settings.save() {
+                Ok(()) => "保存しました（このユーザーの %APPDATA%\\AegisGuard）".into(),
+                Err(e) => format!("保存できませんでした：{e}"),
+            });
+        }
+        if let Some(note) = &self.settings_note {
+            ui.label(
+                RichText::new(note)
+                    .size(theme::CAPTION)
+                    .color(p.text_secondary),
+            );
+        }
         fluent::section(ui, "ルール");
         rows(ui, p, &[views::rules_row(&self.data, now)], &[icon::RULES]);
         fluent::settings_card(
@@ -631,7 +753,7 @@ impl AegisApp {
             p,
             icon::LOCK,
             "ルールの更新・署名鍵",
-            "GUIからのルール更新・署名鍵の設定はまだ利用できません（CLI `aegisguard rules`）。",
+            "ルールパックの署名鍵の管理主体とライセンスが未決定のため、自動配信・自動更新は行いません。更新は管理者がCLI（`aegisguard rules install --trusted-key ...`）で署名を検証して行い、失敗時は前の世代に戻します（`rules rollback`）。",
             Some(Status::NotAvailable),
         );
         fluent::section(ui, "このアプリについて");

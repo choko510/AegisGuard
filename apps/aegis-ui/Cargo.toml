@@ -14,11 +14,12 @@ aegisguard = { path = "../.." }
 # from the operating system at start-up.
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "glow", "x11", "wayland"] }
 flate2 = "1"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target."cfg(windows)".dependencies]
 # Read-only: the Windows accent palette (HKCU) for Fluent accent colors.
-windows-sys = { version = "0.61", features = ["Win32_System_Registry"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
 
 [[bin]]
 name = "aegis-ui"

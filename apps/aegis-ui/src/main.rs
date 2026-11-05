@@ -12,9 +12,11 @@ mod data;
 mod fluent;
 mod fonts;
 mod live;
+mod notify;
 mod png;
 mod status;
 mod theme;
+mod tray;
 mod views;
 
 use app::{AegisApp, Page, ThemeChoice};
@@ -153,7 +155,9 @@ fn main() -> eframe::Result {
     let mut app = if options.screenshot.is_some() && !options.live {
         AegisApp::new(options.page, options.theme)
     } else {
-        AegisApp::new(options.page, options.theme).with_live()
+        AegisApp::new(options.page, options.theme)
+            .with_live()
+            .with_desktop_integration()
     };
     // Files named on the command line are loaded before the first frame
     // (bounded and cancellable like drag and drop).

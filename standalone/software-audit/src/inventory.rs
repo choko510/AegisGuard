@@ -62,7 +62,7 @@ pub fn assemble(sources: Vec<SourceData>) -> InventoryReport {
         let mut status = source.status.clone();
         let mut seen = 0;
         coverage.skipped += source.skipped;
-        if source.skipped > 0 {
+        if source.skipped > 0 && status == "complete" {
             status = "partial".into();
         }
         for entry in source.entries.iter().cloned() {

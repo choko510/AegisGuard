@@ -210,12 +210,9 @@ fn analyze_layer(layer: &Layer, report: &mut Report) {
 
 pub fn inspect(data: &[u8], report: &mut Report) {
     // scan.rs caps input at 4 MiB, including partially written files.
-    let root = match if data.len() <= MAX_LAYER_BYTES {
-        decode_text(data)
-    } else {
-        // Large source files are still allowed in root, never as derived layers.
-        Some(String::from_utf8_lossy(data).into_owned())
-    } {
+    // Root files are capped by scan.rs at 4 MiB; derived layers are capped separately.
+    // Decode UTF-16 even for large root scripts instead of silently missing their text.
+    let root = match decode_text(data) {
         Some(text) => text,
         None => {
             report.unavailable("unreadable", "Cannot decode script text");

@@ -1,0 +1,14 @@
+[package]
+name = "driver-inventory"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Read-only Windows SCM driver and service inventory"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+serde_json = "=1.0.154"
+
+# Independent from the main AegisGuard Cargo workspace.
+[workspace]

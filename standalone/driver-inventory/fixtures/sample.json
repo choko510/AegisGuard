@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "enumeration_status": "complete",
+  "services": [
+    {
+      "name": "ExampleDriver",
+      "service_type": 1,
+      "state": 4,
+      "start_type": 1,
+      "image_path": "\\SystemRoot\\System32\\drivers\\example.sys",
+      "file_state": "exists",
+      "signature": "not_checked",
+      "dependency_count": 0
+    },
+    {
+      "name": "FSFilter",
+      "service_type": 2,
+      "state": 1,
+      "start_type": 0,
+      "image_path": "\\SystemRoot\\System32\\drivers\\filter.sys",
+      "file_state": "not_checked"
+    },
+    {
+      "name": "ExampleService",
+      "service_type": 16,
+      "state": 4,
+      "start_type": 2,
+      "delayed_auto_start": true,
+      "image_path": "\"C:\\Program Files\\Vendor\\service.exe\" --argument-redacted",
+      "file_state": "exists"
+    }
+  ]
+}

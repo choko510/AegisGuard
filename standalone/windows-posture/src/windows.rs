@@ -2,6 +2,8 @@
 //! No user input is ever interpolated into any of these fixed scripts.
 use crate::runner::{run_program, RunFailure};
 use serde_json::{json, Map, Value};
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -84,17 +86,36 @@ try {
 const BITLOCKER: &str = r#"
 $ErrorActionPreference='Stop'
 try {
-    # Only three harmless metadata properties are selected. Never request key protectors,
-    # numerical passwords, recovery keys or drive identifiers.
-    $volumes=@(Get-CimInstance -Namespace 'root\CIMV2\Security\MicrosoftVolumeEncryption' -ClassName 'Win32_EncryptableVolume' -Property VolumeType,ProtectionStatus,ConversionStatus -OperationTimeoutSec 5 -ErrorAction Stop | Where-Object { $_.VolumeType -eq 0 })
+    # Read only VolumeType to identify the OS volume. No recovery key,
+    # protector IDs, passwords, drive letters, or raw CIM objects are output.
+    $volumes=@(Get-CimInstance -Namespace 'root\CIMV2\Security\MicrosoftVolumeEncryption' -ClassName 'Win32_EncryptableVolume' -Property VolumeType -OperationTimeoutSec 5 -ErrorAction Stop | Where-Object { $_.VolumeType -eq 0 })
     $count=[math]::Min($volumes.Count,2)
     $protection=$null
     $conversion=$null
+    $status='ok'
     if ($count -eq 1) {
-        if ($null -ne $volumes[0].ProtectionStatus) { $protection=[int]$volumes[0].ProtectionStatus }
-        if ($null -ne $volumes[0].ConversionStatus) { $conversion=[int]$volumes[0].ConversionStatus }
+        # These are the documented read-only methods for current state.
+        # Do not fall back to potentially stale WMI properties on failure.
+        $volume=$volumes[0]
+        $p=Invoke-CimMethod -InputObject $volume -MethodName 'GetProtectionStatus' -ErrorAction Stop
+        $c=Invoke-CimMethod -InputObject $volume -MethodName 'GetConversionStatus' -Arguments @{PrecisionFactor=[uint32]0} -ErrorAction Stop
+        if ($null -eq $p.ReturnValue -or $null -eq $c.ReturnValue) {
+            $status='error'
+        } elseif ([uint64]$p.ReturnValue -eq 0 -and [uint64]$c.ReturnValue -eq 0) {
+            if ($null -ne $p.ProtectionStatus -and $null -ne $c.ConversionStatus) {
+                $protection=[uint32]$p.ProtectionStatus
+                $conversion=[uint32]$c.ConversionStatus
+            } else {
+                $status='error'
+            }
+        } elseif ([uint64]$p.ReturnValue -eq 2147942405 -or [uint64]$c.ReturnValue -eq 2147942405) {
+            $status='permission_denied'
+        } else {
+            # A locked volume, unsupported call or provider error is unknown.
+            $status='error'
+        }
     }
-    @{status='ok';os_volume_count=$count;protection=$protection;conversion=$conversion} | ConvertTo-Json -Compress
+    @{status=$status;os_volume_count=$count;protection=$protection;conversion=$conversion} | ConvertTo-Json -Compress
 } catch {
     $status='error'
     if ($_.Exception.HResult -eq -2147024891 -or [string]$_.CategoryInfo.Category -eq 'PermissionDenied') {
@@ -106,13 +127,29 @@ try {
 }
 "#;
 
+// GetSystemDirectoryW is a kernel32 API. The environment, PATH, working
+// directory, and user-provided fixture never determine the executable path.
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetSystemDirectoryW(buffer: *mut u16, buffer_length: u32) -> u32;
+}
+
 fn powershell_path() -> Option<PathBuf> {
-    let root = PathBuf::from(std::env::var_os("SystemRoot")?);
-    if !root.is_absolute() {
+    const MAX_SYSTEM_DIRECTORY_CHARS: usize = 1024;
+    let mut buffer = [0_u16; MAX_SYSTEM_DIRECTORY_CHARS];
+    // SAFETY: The buffer has capacity MAX_SYSTEM_DIRECTORY_CHARS UTF-16 code
+    // units and remains alive during the call. We reject zero/overflow/truncation.
+    let written = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+    let length = usize::try_from(written).ok()?;
+    if length == 0 || length >= buffer.len() {
+        return None;
+    }
+    let directory = PathBuf::from(OsString::from_wide(&buffer[..length]));
+    if !directory.is_absolute() {
         return None;
     }
     Some(
-        root.join("System32")
+        directory
             .join("WindowsPowerShell")
             .join("v1.0")
             .join("powershell.exe"),

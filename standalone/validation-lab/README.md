@@ -61,6 +61,7 @@ cargo test --locked
 ```powershell
 $root = Resolve-Path .\lab-corpus
 $actual = Join-Path (Get-Location) "actual.jsonl"
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 if (Test-Path $actual) { throw "Refusing to overwrite existing report" }
 foreach ($name in @("browser-update","benign-com","k2f-analog-chain","missing-log","pid-reuse","delayed-events","duplicate-event","lookalike-path","stale-ioc","admin-script")) {
     $spool = Join-Path (Join-Path $root $name) "events.jsonl"
@@ -68,7 +69,8 @@ foreach ($name in @("browser-update","benign-com","k2f-analog-chain","missing-lo
     if ($LASTEXITCODE -ne 0) { throw "Correlation failed for $name" }
     $result = $raw | ConvertFrom-Json
     $result | Add-Member -NotePropertyName case_id -NotePropertyValue $name
-    $result | ConvertTo-Json -Depth 32 -Compress | Add-Content -Path $actual -Encoding utf8
+    $line = $result | ConvertTo-Json -Depth 32 -Compress
+    [System.IO.File]::AppendAllText($actual, $line + [char]10, $utf8NoBom)
 }
 cargo run --locked -- summarize --expected .\lab-corpus\manifest.json --actual $actual
 ```

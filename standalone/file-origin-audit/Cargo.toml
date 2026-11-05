@@ -7,3 +7,6 @@ description = "Read-only Windows Mark-of-the-Web origin auditor (standalone)"
 publish = false
 
 [dependencies]
+
+# Keep this tool independent of the parent AegisGuard workspace.
+[workspace]

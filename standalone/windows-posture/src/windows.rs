@@ -168,14 +168,18 @@ fn query(script: &'static str) -> Value {
     let Some(powershell) = powershell_path() else {
         return json!({"status":"error"});
     };
-    let args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script];
+    let args = [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script,
+    ];
     match run_program(&powershell, &args, Duration::from_secs(10)) {
         Ok(output) => {
             let parsed = serde_json::from_slice::<Value>(&output);
             match parsed {
-                Ok(Value::Object(object)) if object.contains_key("status") => {
-                    Value::Object(object)
-                }
+                Ok(Value::Object(object)) if object.contains_key("status") => Value::Object(object),
                 _ => json!({"status":"error"}),
             }
         }
@@ -194,7 +198,6 @@ pub fn collect() -> Value {
     root.insert("bitlocker".to_owned(), query(BITLOCKER));
     Value::Object(root)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -235,6 +238,9 @@ mod tests {
             .join("WindowsPowerShell")
             .join("v1.0")
             .join("powershell.exe");
-        assert_eq!(powershell_path_from_directory(&units, length), Some(expected));
+        assert_eq!(
+            powershell_path_from_directory(&units, length),
+            Some(expected)
+        );
     }
 }

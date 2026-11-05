@@ -53,7 +53,7 @@ fn fixture_cli_rejects_oversized_input_before_parse() {
 
 #[test]
 fn fixture_cli_handles_empty_and_corrupt_input() {
-    for input in [b"".as_slice(), b"{broken".as_slice()] {
+    for input in [&b""[..], &b"{broken"[..]] {
         let path = temporary_fixture(input);
         let output = inspect(&path);
         fs::remove_file(path).unwrap();

@@ -5,6 +5,7 @@ edition = "2021"
 description = "Windows-first, Defender-compatible static threat triage toolkit"
 repository = "https://github.com/choko510/AegisGuard"
 rust-version = "1.85"
+publish = false
 
 [dependencies]
 base64 = "0.22"

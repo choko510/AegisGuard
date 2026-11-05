@@ -1,5 +1,7 @@
 mod budget;
 mod c2;
+// The collector only has a production caller on Windows (the Event Log source).
+#[cfg_attr(not(windows), allow(dead_code))]
 mod events;
 mod fsafe;
 mod jsonl;

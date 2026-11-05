@@ -10,18 +10,27 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 struct Temporary(PathBuf);
 impl Temporary {
     fn new() -> Self {
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let p = std::env::temp_dir().join(format!(
             "validation-lab-test-{}-{}-{}",
-            std::process::id(), nanos, COUNTER.fetch_add(1, Ordering::Relaxed)
+            std::process::id(),
+            nanos,
+            COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&p).unwrap();
         Self(p)
     }
-    fn path(&self) -> &Path { &self.0 }
+    fn path(&self) -> &Path {
+        &self.0
+    }
 }
 impl Drop for Temporary {
-    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 fn snap(root: &Path) -> Vec<(String, Vec<u8>)> {
@@ -29,16 +38,21 @@ fn snap(root: &Path) -> Vec<(String, Vec<u8>)> {
         for entry in fs::read_dir(dir).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.is_dir() { walk(base, &path, files); }
-            else {
-                let relative = path.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
+            if path.is_dir() {
+                walk(base, &path, files);
+            } else {
+                let relative = path
+                    .strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 files.push((relative, fs::read(&path).unwrap()));
             }
         }
     }
     let mut files = Vec::new();
     walk(root, root, &mut files);
-    files.sort_by(|a,b| a.0.cmp(&b.0));
+    files.sort_by(|a, b| a.0.cmp(&b.0));
     files
 }
 
@@ -58,14 +72,19 @@ fn deterministic_all_files_and_cross_platform_jsonl() {
     let first = snap(&a);
     assert_eq!(first, snap(&b));
     assert_ne!(first, snap(&c));
-    assert_eq!(first.len(), 1 + 10 + 10 + 1 + first.iter().filter(|p| p.0.ends_with(".xml")).count());
+    assert_eq!(
+        first.len(),
+        1 + 10 + 10 + 1 + first.iter().filter(|p| p.0.ends_with(".xml")).count()
+    );
     assert_eq!(verify(&a).unwrap()["status"], "complete");
     let xml = fs::read_to_string(a.join("k2f-analog-chain/event-000.xml")).unwrap();
     assert!(xml.contains("Microsoft-Windows-Sysmon"));
     assert!(xml.contains("EventRecordID"));
     let jsonl = fs::read(a.join("k2f-analog-chain/events.jsonl")).unwrap();
     assert!(jsonl.iter().all(|b| *b != b'\r'));
-    assert!(String::from_utf8(jsonl).unwrap().contains("C:\\\\Users\\\\Lab"));
+    assert!(String::from_utf8(jsonl)
+        .unwrap()
+        .contains("C:\\\\Users\\\\Lab"));
 }
 
 #[test]
@@ -117,7 +136,10 @@ fn incomplete_report_is_not_success() {
     assert_eq!(summary["coverage"]["unknown"], 1);
     let report = json!({"case_id":"benign-com","rules":[{"rule_id":"AG-B002","evaluable":false}],"findings":[]});
     fs::write(&actual, format!("{report}\n")).unwrap();
-    assert_eq!(summarize(&a.join("manifest.json"), &actual).unwrap()["status"], "partial");
+    assert_eq!(
+        summarize(&a.join("manifest.json"), &actual).unwrap()["status"],
+        "partial"
+    );
     fs::write(&actual, b"bad json\n").unwrap();
     assert!(summarize(&a.join("manifest.json"), &actual).is_err());
 }
@@ -145,8 +167,10 @@ fn untrusted_finding_without_expected_evidence_is_not_a_pass() {
     let temp = Temporary::new();
     let a = create(&temp, "case", 42, "k2f-analog-chain");
     let actual = temp.path().join("actual.jsonl");
-    let rules = ["AG-B001","AG-B002","AG-B003","AG-B005"].iter()
-        .map(|id| json!({"rule_id":id,"evaluable":true})).collect::<Vec<_>>();
+    let rules = ["AG-B001", "AG-B002", "AG-B003", "AG-B005"]
+        .iter()
+        .map(|id| json!({"rule_id":id,"evaluable":true}))
+        .collect::<Vec<_>>();
     let report = json!({"case_id":"k2f-analog-chain","rules":rules,
         "findings":[{"rule_id":"AG-B001","event_refs":["nonexistent"]},
                     {"rule_id":"AG-B002","event_refs":["nonexistent"]},
@@ -189,13 +213,20 @@ fn malformed_incomplete_and_unknown_schema_reports_do_not_pass() {
     let a = create(&temp, "case", 42, "benign-com");
     let actual = temp.path().join("actual.jsonl");
     // Missing findings array must not be interpreted as no detection.
-    let truncated = json!({"case_id":"benign-com","rules":[{"rule_id":"AG-B002","evaluable":true}]});
+    let truncated =
+        json!({"case_id":"benign-com","rules":[{"rule_id":"AG-B002","evaluable":true}]});
     fs::write(&actual, format!("{truncated}\n")).unwrap();
-    assert_eq!(summarize(&a.join("manifest.json"), &actual).unwrap()["status"], "partial");
+    assert_eq!(
+        summarize(&a.join("manifest.json"), &actual).unwrap()["status"],
+        "partial"
+    );
     let partial = json!({"case_id":"benign-com","status":"partial",
         "rules":[{"rule_id":"AG-B002","evaluable":true}],"findings":[]});
     fs::write(&actual, format!("{partial}\n")).unwrap();
-    assert_eq!(summarize(&a.join("manifest.json"), &actual).unwrap()["coverage"]["unknown"], 1);
+    assert_eq!(
+        summarize(&a.join("manifest.json"), &actual).unwrap()["coverage"]["unknown"],
+        1
+    );
     let newer = json!({"schema_version":999,"case_id":"benign-com","rules":[],"findings":[]});
     fs::write(&actual, format!("{newer}\n")).unwrap();
     assert!(summarize(&a.join("manifest.json"), &actual).is_err());
@@ -205,13 +236,17 @@ fn malformed_incomplete_and_unknown_schema_reports_do_not_pass() {
 fn stale_ioc_is_explicitly_expired_and_future_rules_remain_planned() {
     let temp = Temporary::new();
     let a = create(&temp, "case", 42, "stale-ioc");
-    let ioc: Value = serde_json::from_slice(&fs::read(a.join("stale-ioc/expired-ioc.json")).unwrap()).unwrap();
+    let ioc: Value =
+        serde_json::from_slice(&fs::read(a.join("stale-ioc/expired-ioc.json")).unwrap()).unwrap();
     assert!(ioc["expires_at_unix_ms"].as_u64().unwrap() < 1_793_872_800_000);
     assert_eq!(ioc["compatible_with_aegisguard_c2_cache"], false);
     assert_eq!(verify(&a).unwrap()["status"], "complete");
     let actual = temp.path().join("actual.jsonl");
     fs::write(&actual, b"{\"rules\":[],\"findings\":[]}\n").unwrap();
-    assert_eq!(summarize(&a.join("manifest.json"), &actual).unwrap()["status"], "partial");
+    assert_eq!(
+        summarize(&a.join("manifest.json"), &actual).unwrap()["status"],
+        "partial"
+    );
 }
 
 #[test]
@@ -219,11 +254,23 @@ fn a_valid_json_object_without_final_newline_is_incomplete() {
     let temp = Temporary::new();
     let a = create(&temp, "case", 42, "benign-com");
     let actual = temp.path().join("actual.jsonl");
-    fs::write(&actual, b"{\"case_id\":\"benign-com\",\"rules\":[],\"findings\":[]}").unwrap();
+    fs::write(
+        &actual,
+        b"{\"case_id\":\"benign-com\",\"rules\":[],\"findings\":[]}",
+    )
+    .unwrap();
     assert!(summarize(&a.join("manifest.json"), &actual).is_err());
-    fs::write(&actual, b"{\"case_id\":\"benign-com\",\"rules\":[],\"findings\":[]}\n\n").unwrap();
+    fs::write(
+        &actual,
+        b"{\"case_id\":\"benign-com\",\"rules\":[],\"findings\":[]}\n\n",
+    )
+    .unwrap();
     assert!(summarize(&a.join("manifest.json"), &actual).is_err());
-    fs::write(&actual, b"{\"ruleset_version\":999,\"case_id\":\"benign-com\",\"rules\":[],\"findings\":[]}\n").unwrap();
+    fs::write(
+        &actual,
+        b"{\"ruleset_version\":999,\"case_id\":\"benign-com\",\"rules\":[],\"findings\":[]}\n",
+    )
+    .unwrap();
     assert!(summarize(&a.join("manifest.json"), &actual).is_err());
 }
 
@@ -231,12 +278,19 @@ fn a_valid_json_object_without_final_newline_is_incomplete() {
 fn complete_synthetic_chain_with_expected_refs_is_compared_not_called_malware() {
     let temp = Temporary::new();
     let a = create(&temp, "case", 42, "k2f-analog-chain");
-    let expected: Value = serde_json::from_slice(&fs::read(a.join("manifest.json")).unwrap()).unwrap();
+    let expected: Value =
+        serde_json::from_slice(&fs::read(a.join("manifest.json")).unwrap()).unwrap();
     let checks = expected["cases"][0]["expected"].as_array().unwrap();
-    let rules = checks.iter().filter(|e| e["outcome"] != "planned")
-        .map(|e| json!({"rule_id":e["rule_id"],"evaluable":true})).collect::<Vec<_>>();
-    let findings = checks.iter().filter(|e| e["outcome"] == "present")
-        .map(|e| json!({"rule_id":e["rule_id"],"event_refs":e["event_refs"]})).collect::<Vec<_>>();
+    let rules = checks
+        .iter()
+        .filter(|e| e["outcome"] != "planned")
+        .map(|e| json!({"rule_id":e["rule_id"],"evaluable":true}))
+        .collect::<Vec<_>>();
+    let findings = checks
+        .iter()
+        .filter(|e| e["outcome"] == "present")
+        .map(|e| json!({"rule_id":e["rule_id"],"event_refs":e["event_refs"]}))
+        .collect::<Vec<_>>();
     let actual = temp.path().join("actual.jsonl");
     let report = json!({"case_id":"k2f-analog-chain","ruleset_version":2,
         "rules":rules,"findings":findings});
@@ -247,7 +301,6 @@ fn complete_synthetic_chain_with_expected_refs_is_compared_not_called_malware() 
     assert_eq!(result["coverage"]["planned"], 1);
     assert_eq!(result["status"], "partial"); // planned means not fully implemented
 }
-
 
 #[test]
 fn unexpected_finding_in_benign_case_must_fail() {
@@ -300,7 +353,11 @@ fn xml_and_jsonl_must_match_even_after_rehashing_the_manifest() {
     manifest["cases"][0]["xml"][0]["sha256"] =
         json!(format!("{:x}", Sha256::digest(altered.as_bytes())));
     manifest["cases"][0]["xml"][0]["bytes"] = json!(altered.len());
-    fs::write(dir.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
     let result = verify(&dir).unwrap();
     assert_eq!(result["status"], "partial");
     assert!(result.to_string().contains("XML/JSONL event mismatch"));

@@ -27,9 +27,12 @@ fn system_powershell() -> Result<PathBuf, &'static str> {
     if length == 0 || length as usize >= chars.len() {
         return Err("system_directory_unavailable");
     }
-    let directory = String::from_utf16(&chars[..length as usize])
-        .map_err(|_| "system_directory_invalid")?;
-    Ok(PathBuf::from(directory).join("WindowsPowerShell").join("v1.0").join("powershell.exe"))
+    let directory =
+        String::from_utf16(&chars[..length as usize]).map_err(|_| "system_directory_invalid")?;
+    Ok(PathBuf::from(directory)
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe"))
 }
 
 pub fn collect(limit: usize, include_wmi: bool) -> Result<Capture, &'static str> {

@@ -1,12 +1,30 @@
 //! Honest status vocabulary shared by every screen.
 //!
-//! A state is always shown with a text label and a glyph, never by color
-//! alone. Nothing here can express "protected" or "safe": the best state is
-//! `NothingFound`, which still means "only within what was inspected".
+//! A state is always shown with an icon (Segoe Fluent Icons) *and* a text
+//! label, never by color alone. Nothing here can express "protected" or
+//! "safe": the best state is `NothingFound`, which only means "nothing
+//! matched within what was inspected".
+
+/// Segoe Fluent Icons code points used by the UI.
+pub mod icon {
+    pub const HOME: &str = "\u{E80F}";
+    pub const SCAN: &str = "\u{E721}";
+    pub const BROWSER: &str = "\u{E774}";
+    pub const REALTIME: &str = "\u{E9D9}";
+    pub const NETWORK: &str = "\u{E968}";
+    pub const HISTORY: &str = "\u{E81C}";
+    pub const SETTINGS: &str = "\u{E713}";
+    pub const SHIELD: &str = "\u{EA18}";
+    pub const OPEN_FILE: &str = "\u{E8E5}";
+    pub const CLOCK: &str = "\u{E823}";
+    pub const SENSOR: &str = "\u{E957}";
+    pub const DOCUMENT: &str = "\u{E8A5}";
+    pub const RULES: &str = "\u{E8F1}";
+    pub const INFO: &str = "\u{E946}";
+    pub const LOCK: &str = "\u{E72E}";
+}
 
 /// What a piece of the UI can truthfully say about something.
-// Some states are only produced once data views exist (P7-02).
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     /// The feature does not exist in this build.
@@ -19,7 +37,7 @@ pub enum Status {
     Incomplete,
     /// Inspected completely, nothing matched. Not proof of safety.
     NothingFound,
-    /// Something worth a look (observed / low).
+    /// Something worth noting (observed / low).
     Observed,
     /// Needs review.
     Review,
@@ -31,7 +49,7 @@ pub enum Status {
     Stopped,
 }
 
-/// Visual tone of a status; mapped to colors by the theme.
+/// InfoBar severity of a status; mapped to colors by the theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     Neutral,
@@ -57,19 +75,19 @@ impl Status {
         }
     }
 
-    /// A glyph that also distinguishes the state without color.
-    pub fn glyph(self) -> &'static str {
+    /// Segoe Fluent Icons glyph.
+    pub fn icon(self) -> &'static str {
         match self {
-            Self::NotAvailable => "―",
-            Self::NoData => "？",
-            Self::Stale => "⌛",
-            Self::Incomplete => "◐",
-            Self::NothingFound => "○",
-            Self::Observed => "●",
-            Self::Review => "▲",
-            Self::High => "◆",
-            Self::Running => "▶",
-            Self::Stopped => "■",
+            Self::NotAvailable => "\u{E738}", // Remove
+            Self::NoData => "\u{E9CE}",       // Unknown
+            Self::Stale => "\u{E823}",        // Clock
+            Self::Incomplete => "\u{E7BA}",   // Warning
+            Self::NothingFound => "\u{E73E}", // CheckMark
+            Self::Observed => "\u{E946}",     // Info
+            Self::Review => "\u{E7C1}",       // Flag
+            Self::High => "\u{EA39}",         // ErrorBadge
+            Self::Running => "\u{E768}",      // Play
+            Self::Stopped => "\u{E71A}",      // Stop
         }
     }
 
@@ -107,15 +125,13 @@ mod tests {
     ];
 
     #[test]
-    fn every_status_has_a_distinct_label_and_glyph() {
-        let mut labels: Vec<_> = ALL.iter().map(|s| s.label()).collect();
-        let mut glyphs: Vec<_> = ALL.iter().map(|s| s.glyph()).collect();
-        labels.sort_unstable();
-        labels.dedup();
-        glyphs.sort_unstable();
-        glyphs.dedup();
-        assert_eq!(labels.len(), ALL.len());
-        assert_eq!(glyphs.len(), ALL.len());
+    fn every_status_has_a_distinct_label_and_icon() {
+        for f in [Status::label, Status::icon] {
+            let mut v: Vec<_> = ALL.iter().map(|s| f(*s)).collect();
+            v.sort_unstable();
+            v.dedup();
+            assert_eq!(v.len(), ALL.len());
+        }
     }
 
     #[test]

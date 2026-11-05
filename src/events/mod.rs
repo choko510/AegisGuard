@@ -7,6 +7,7 @@ pub mod collector;
 pub mod correlate;
 pub mod network;
 pub mod process;
+pub mod timeline;
 
 #[cfg(windows)]
 pub mod winevt;

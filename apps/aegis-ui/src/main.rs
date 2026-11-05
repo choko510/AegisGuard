@@ -1,7 +1,7 @@
 //! AegisGuard desktop UI (read-only, runs as the normal user).
 //!
 //! Usage: `aegis-ui [--page home|scan|browser|realtime|network|history|settings]
-//! [--theme light|dark] [--open result.json ...] [--screenshot out.png [--size 1280x800] [--scale 1.0]]`
+//! [--theme system|light|dark] [--open result.json ...] [--screenshot out.png [--size 1280x800] [--scale 1.0]]`
 //!
 //! `--screenshot` renders the chosen page, writes a PNG and exits; it is used
 //! to check layout, DPI scaling and Japanese text on a real machine.
@@ -9,6 +9,7 @@
 
 mod app;
 mod data;
+mod fluent;
 mod fonts;
 mod png;
 mod status;
@@ -33,7 +34,7 @@ struct Options {
 fn parse_args() -> Result<Options, String> {
     let mut o = Options {
         page: Page::Home,
-        theme: ThemeChoice::Light,
+        theme: ThemeChoice::System,
         screenshot: None,
         size: [1180.0, 760.0],
         scale: None,
@@ -49,6 +50,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "--theme" => {
                 o.theme = match value()?.as_str() {
+                    "system" => ThemeChoice::System,
                     "light" => ThemeChoice::Light,
                     "dark" => ThemeChoice::Dark,
                     other => return Err(format!("unknown theme {other}")),
@@ -133,7 +135,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("AegisGuard")
             .with_inner_size(options.size)
-            .with_min_inner_size([640.0, 480.0]),
+            .with_min_inner_size([520.0, 420.0]),
         ..Default::default()
     };
     let mut app = AegisApp::new(options.page, options.theme);
@@ -145,8 +147,11 @@ fn main() -> eframe::Result {
         native,
         Box::new(move |cc| {
             let report = fonts::install(&cc.egui_ctx);
-            if !report.cjk {
+            if !report.regular {
                 eprintln!("aegis-ui: no Japanese system font found; text may not render");
+            }
+            if !report.icons {
+                eprintln!("aegis-ui: Segoe Fluent Icons not found; icons may not render");
             }
             Ok(match options.screenshot {
                 Some(out) => Box::new(ScreenshotApp {

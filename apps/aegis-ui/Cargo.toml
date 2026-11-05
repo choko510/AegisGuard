@@ -16,6 +16,10 @@ eframe = { version = "0.37.0", default-features = false, features = ["accesskit"
 flate2 = "1"
 serde_json = "1"
 
+[target."cfg(windows)".dependencies]
+# Read-only: the Windows accent palette (HKCU) for Fluent accent colors.
+windows-sys = { version = "0.61", features = ["Win32_System_Registry"] }
+
 [[bin]]
 name = "aegis-ui"
 path = "src/main.rs"

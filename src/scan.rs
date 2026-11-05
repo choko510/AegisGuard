@@ -1,9 +1,11 @@
+use crate::budget::{self, Budget};
 use crate::model::{Assessment, FileIdentity, Report};
 use crate::{fsafe, pe, script, Result};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
+use std::time::Duration;
 use walkdir::WalkDir;
 
 const MAX_PE_BYTES: u64 = 64 * 1024 * 1024;
@@ -19,7 +21,7 @@ fn classify(path: &Path) -> Option<&'static str> {
     }
 }
 
-pub fn scan_file(path: &Path) -> Report {
+pub fn scan_file(path: &Path, time_limit: Duration) -> Report {
     let kind = classify(path).unwrap_or("unsupported");
     let mut report = Report::new(path.display().to_string(), kind);
     if kind == "unsupported" {
@@ -166,10 +168,11 @@ pub fn scan_file(path: &Path) -> Report {
     }
 
     report.sha256 = Some(hex::encode(Sha256::digest(&data)));
+    let budget = Budget::new(time_limit);
     if kind == "pe" {
-        pe::inspect(&data, &mut report);
+        pe::inspect(&data, &mut report, &budget);
     } else {
-        script::inspect(&data, &mut report);
+        script::inspect(&data, &mut report, &budget);
     }
     report.finish();
     report
@@ -187,11 +190,33 @@ fn walk_error_report(root: &Path, error: &walkdir::Error) -> Report {
     report
 }
 
+/// Upper bounds for one `scan` invocation. Every limit is finite by default;
+/// reaching one stops the scan with an explicit record instead of a silent cut.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    pub per_file: Duration,
+    pub max_files: u64,
+    pub max_total_bytes: u64,
+    pub max_duration: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            per_file: Duration::from_secs(10),
+            max_files: 200_000,
+            max_total_bytes: 32 * 1024 * 1024 * 1024,
+            max_duration: Duration::from_secs(4 * 3600),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Summary {
-    analyzed: usize,
-    incomplete: usize,
-    not_assessed: usize,
+    analyzed: u64,
+    incomplete: u64,
+    not_assessed: u64,
+    bytes_read: u64,
 }
 
 impl Summary {
@@ -201,10 +226,41 @@ impl Summary {
             Assessment::Incomplete => self.incomplete += 1,
             Assessment::NotAssessed => self.not_assessed += 1,
         }
+        self.bytes_read = self.bytes_read.saturating_add(report.coverage.bytes_read);
+    }
+
+    fn files(&self) -> u64 {
+        self.analyzed + self.incomplete + self.not_assessed
+    }
+
+    /// Why the scan must stop before the next file, if it must.
+    fn stop_reason(&self, limits: &Limits, run: &Budget) -> Option<&'static str> {
+        if budget::cancelled() {
+            Some("scan_cancelled")
+        } else if run.exceeded().is_some() {
+            Some("scan_time_limit")
+        } else if self.files() >= limits.max_files {
+            Some("scan_file_limit")
+        } else if self.bytes_read >= limits.max_total_bytes {
+            Some("scan_byte_limit")
+        } else {
+            None
+        }
     }
 }
 
-pub fn run(path: &Path, recursive: bool, output: Option<&Path>) -> Result<()> {
+/// Stands for every entry under `root` that was not reached.
+fn stopped_report(root: &Path, reason: &'static str) -> Report {
+    let mut report = Report::new(root.display().to_string(), "unknown");
+    report.unavailable(
+        "scan_stopped",
+        reason,
+        "The scan stopped early; remaining entries under this path were not assessed",
+    );
+    report
+}
+
+pub fn run(path: &Path, recursive: bool, output: Option<&Path>, limits: Limits) -> Result<()> {
     let mut log: Option<File> = if let Some(destination) = output {
         if let Some(parent) = destination.parent() {
             if !parent.as_os_str().is_empty() {
@@ -220,9 +276,11 @@ pub fn run(path: &Path, recursive: bool, output: Option<&Path>) -> Result<()> {
     } else {
         None
     };
+    // Ctrl-C finishes the current bounded unit, records the stop and exits.
+    let _ = ctrlc::set_handler(budget::cancel);
     let mut summary = Summary::default();
     if path.is_file() || path.is_symlink() {
-        emit(scan_file(path), &mut log, &mut summary)?;
+        emit(scan_file(path, limits.per_file), &mut log, &mut summary)?;
         print_summary(&summary);
         return Ok(());
     }
@@ -230,31 +288,46 @@ pub fn run(path: &Path, recursive: bool, output: Option<&Path>) -> Result<()> {
         return Err(format!("Path does not exist or is not readable: {}", path.display()).into());
     }
 
+    let run_budget = Budget::new(limits.max_duration);
     let max_depth = if recursive { usize::MAX } else { 1 };
+    let mut stopped = None;
     for entry in WalkDir::new(path).follow_links(false).max_depth(max_depth) {
+        // Symlinks with a target extension are reported as not assessed
+        // rather than silently dropped.
+        let relevant = entry.as_ref().map_or(true, |e| {
+            (e.file_type().is_file() || e.path_is_symlink()) && classify(e.path()).is_some()
+        });
+        if !relevant {
+            continue;
+        }
+        if let Some(reason) = summary.stop_reason(&limits, &run_budget) {
+            stopped = Some(reason);
+            break;
+        }
         match entry {
-            Ok(e) => {
-                // Symlinks with a target extension are reported as not assessed
-                // rather than silently dropped.
-                let candidate = e.file_type().is_file() || e.path_is_symlink();
-                if candidate && classify(e.path()).is_some() {
-                    emit(scan_file(e.path()), &mut log, &mut summary)?;
-                }
-            }
+            Ok(e) => emit(scan_file(e.path(), limits.per_file), &mut log, &mut summary)?,
             Err(e) => {
                 eprintln!("walk error: {e}");
                 emit(walk_error_report(path, &e), &mut log, &mut summary)?;
             }
         }
     }
+    if let Some(reason) = stopped {
+        emit(stopped_report(path, reason), &mut log, &mut summary)?;
+    }
     print_summary(&summary);
-    Ok(())
+    match stopped {
+        Some(reason) => {
+            Err(format!("scan stopped early ({reason}); see the scan_stopped record").into())
+        }
+        None => Ok(()),
+    }
 }
 
 fn print_summary(summary: &Summary) {
     eprintln!(
-        "summary: analyzed={} incomplete={} not_assessed={} (no signals is not proof of safety)",
-        summary.analyzed, summary.incomplete, summary.not_assessed
+        "summary: analyzed={} incomplete={} not_assessed={} bytes_read={} (no signals is not proof of safety)",
+        summary.analyzed, summary.incomplete, summary.not_assessed, summary.bytes_read
     );
 }
 
@@ -282,7 +355,10 @@ mod tests {
 
     #[test]
     fn missing_file_cannot_be_called_clean() {
-        let report = scan_file(Path::new("aegisguard_missing_1234.ps1"));
+        let report = scan_file(
+            Path::new("aegisguard_missing_1234.ps1"),
+            Limits::default().per_file,
+        );
         assert_eq!(report.risk, "not_assessed");
         assert_eq!(report.assessment, Assessment::NotAssessed);
         assert_eq!(report.signal_level, SignalLevel::NotEvaluated);
@@ -292,7 +368,7 @@ mod tests {
 
     #[test]
     fn unsupported_type_is_not_assessed() {
-        let report = scan_file(Path::new("notes.txt"));
+        let report = scan_file(Path::new("notes.txt"), Limits::default().per_file);
         assert_eq!(report.status, "unsupported");
         assert_eq!(report.not_assessed_reason, Some("unsupported_file_type"));
         assert!(report.coverage.analyzers.is_empty());

@@ -1,3 +1,4 @@
+use crate::budget::Budget;
 use crate::model::Report;
 
 fn le_u16(bytes: &[u8], at: usize) -> Option<u16> {
@@ -29,7 +30,7 @@ fn entropy(data: &[u8]) -> f64 {
 
 /// Strictly bounded PE structural triage; not Authenticode verification or a disassembler.
 /// All offsets derive from the file and are checked before slicing.
-pub fn inspect(data: &[u8], report: &mut Report) {
+pub fn inspect(data: &[u8], report: &mut Report, budget: &Budget) {
     report.analyzer("pe_header");
     if !data.starts_with(b"MZ") {
         report.unavailable("invalid_pe", "malformed_pe", "Missing DOS MZ signature");
@@ -83,6 +84,10 @@ pub fn inspect(data: &[u8], report: &mut Report) {
     let mut has_wx = false;
     let mut high_entropy = false;
     for i in 0..section_count {
+        if let Some(reason) = budget.exceeded() {
+            report.mark_incomplete(reason);
+            break;
+        }
         let at = sections + i * 40;
         let flags = le_u32(data, at + 36).unwrap_or(0);
         if flags & 0x2000_0000 != 0 && flags & 0x8000_0000 != 0 {
@@ -134,12 +139,17 @@ pub fn inspect(data: &[u8], report: &mut Report) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    fn test_budget() -> Budget {
+        Budget::new(Duration::from_secs(60))
+    }
     use crate::model::Report;
 
     #[test]
     fn rejects_truncated_pe() {
         let mut report = Report::new("sample.exe".into(), "pe");
-        inspect(b"MZ", &mut report);
+        inspect(b"MZ", &mut report, &test_budget());
         report.finish();
         assert_eq!(report.risk, "not_assessed");
         assert_eq!(report.status, "invalid_pe");
@@ -158,11 +168,89 @@ mod tests {
         let section = 0x80 + 4 + 20;
         bytes[section + 36..section + 40].copy_from_slice(&0xa000_0000u32.to_le_bytes());
         let mut report = Report::new("sample.dll".into(), "pe");
-        inspect(&bytes, &mut report);
+        inspect(&bytes, &mut report, &test_budget());
         report.finish();
         assert!(report
             .signals
             .iter()
             .any(|s| s.code == "writable_executable_section"));
+    }
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use crate::model::{Assessment, Report};
+    use std::time::Duration;
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+
+    fn minimal_pe(sections: u16) -> Vec<u8> {
+        let mut bytes = vec![0u8; 0x200 + usize::from(sections) * 40];
+        bytes[0..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x86..0x88].copy_from_slice(&sections.to_le_bytes());
+        bytes
+    }
+
+    fn check(bytes: &[u8], budget: Duration) -> Report {
+        let mut report = Report::new("x.exe".into(), "pe");
+        inspect(bytes, &mut report, &Budget::new(budget));
+        report.finish();
+        assert_eq!(
+            report.analysis_complete,
+            report.assessment == Assessment::Analyzed
+        );
+        if report.risk == "low_signal" {
+            assert_eq!(report.assessment, Assessment::Analyzed);
+        }
+        report
+    }
+
+    #[test]
+    fn mutated_headers_never_panic() {
+        let mut rng = Rng(0x1234_5678_9abc_def1);
+        for i in 0..3000u64 {
+            let mut bytes = minimal_pe((i % 100) as u16);
+            for _ in 0..(1 + rng.next() % 8) {
+                let at = (rng.next() as usize) % bytes.len();
+                bytes[at] = rng.next() as u8;
+            }
+            // Point the first section at random raw ranges, including past the end.
+            let size = (rng.next() % 0x2_0000) as u32;
+            let start = (rng.next() % 0x2_0000) as u32;
+            bytes[0x98 + 16..0x98 + 20].copy_from_slice(&size.to_le_bytes());
+            bytes[0x98 + 20..0x98 + 24].copy_from_slice(&start.to_le_bytes());
+            check(&bytes, Duration::from_secs(60));
+        }
+    }
+
+    #[test]
+    fn random_bytes_never_panic() {
+        let mut rng = Rng(0x0f0f_1e1e_2d2d_3c3c);
+        for i in 0..1000 {
+            let len = (rng.next() % 2048) as usize;
+            let mut bytes: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+            if i % 2 == 0 && bytes.len() >= 2 {
+                bytes[..2].copy_from_slice(b"MZ");
+            }
+            check(&bytes, Duration::from_secs(60));
+        }
+    }
+
+    #[test]
+    fn exhausted_budget_marks_pe_incomplete() {
+        let report = check(&minimal_pe(1), Duration::ZERO);
+        assert_eq!(report.assessment, Assessment::Incomplete);
+        assert!(report.incomplete_reasons.contains(&"analysis_time_limit"));
     }
 }

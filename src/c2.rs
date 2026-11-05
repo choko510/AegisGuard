@@ -210,7 +210,7 @@ fn read_cache(path: &Path) -> Result<(Cache, Option<Generation>)> {
     })
 }
 
-fn public_ip(ip: IpAddr) -> bool {
+pub(crate) fn public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
             let [a, b, c, _] = ip.octets();

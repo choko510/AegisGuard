@@ -148,6 +148,18 @@ aegisguard events collect --channel Microsoft-Windows-Sysmon/Operational --spool
 - `aegisguard events iocs --spool ... --c2-cache data\c2-cache.json [--local-iocs my-iocs.json] [--allowlist allow.json]` は、IOCの根拠をプロセスに結び付けます（P3-01）。`basis` は `direct_ip`（接続先IPが一致）・`dns_query`（IOCドメインを問い合わせた）・`dns_then_connect`（問い合わせの回答に含まれたIPへ5分以内に接続）で、ドメイン名だけでは接続先の証明にしません。期限切れのIOCは `stale_only`、利用者の例外は `suppressed`（理由付き）、3種類以上のプログラムが接続した宛先は共有基盤の可能性として確度を下げます。DoH/DoT・VPN・NRPT経由やSysmonで無効なイベント種別は `visibility` に「見えない」と明記します。
 - ローカルIOCと例外は利用者が管理するJSON配列です（`{"type":"ip|domain","value":"...","expires_at_unix":...}`、例外は `reason` が必須）。期限のない項目は受け付けません。`c2 check` は各一致の出所・ライセンス・期限を `evidence` に出します。
 
+### 遮断候補の計画（P3-02、dry-runのみ）
+
+```powershell
+aegisguard policy plan --spool data\events\sysmon.jsonl --out plans\plan-001.json --expiry-hours 24
+aegisguard policy approve plans\plan-001.json --approver "admin" --note "ticket 123" --out plans\plan-001.approved.json
+```
+
+- **Windows FirewallやWFPなどOSの設定は一切変更しません。** このビルドには適用処理がありません（P3-03は隔離VMでの復旧検証と明示承認が必要なため未実装）。
+- 候補は「アプリのパス × 宛先IP」の送信遮断で、`AegisGuard-` で始まる名前・有効期限（最長7日）・巻き戻しIDを持ち、最大50件です。
+- 次は候補にせず、理由付きで `rejected` に入れます：プロセス不明、共有のシステムプロセス（svchost・lsass・explorer・Defender等）、DNS名だけの根拠、期限切れの根拠、利用者の例外、共有の宛先、調査用ソース（C2IntelFeeds）だけの根拠、確度不足、非公開アドレス、上限超過。
+- `approve` は承認を監査ログ（`data\policy\audit.jsonl`）に追記するだけで、適用しません。計画ファイルは上書きしません。
+
 ### 限定FIM（P2-04、読み取りのみ）
 
 ```powershell

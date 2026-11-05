@@ -9,8 +9,18 @@ pub struct Signal {
 }
 
 impl Signal {
-    pub fn new(code: &'static str, severity: u32, source: impl Into<String>, reason: &'static str) -> Self {
-        Self { code, severity, source: source.into(), reason }
+    pub fn new(
+        code: &'static str,
+        severity: u32,
+        source: impl Into<String>,
+        reason: &'static str,
+    ) -> Self {
+        Self {
+            code,
+            severity,
+            source: source.into(),
+            reason,
+        }
     }
 }
 
@@ -42,10 +52,21 @@ impl Report {
         }
     }
 
-    pub fn add(&mut self, code: &'static str, severity: u32, source: impl Into<String>, reason: &'static str) {
+    pub fn add(
+        &mut self,
+        code: &'static str,
+        severity: u32,
+        source: impl Into<String>,
+        reason: &'static str,
+    ) {
         let source = source.into();
-        if !self.signals.iter().any(|s| s.code == code && s.source == source) {
-            self.signals.push(Signal::new(code, severity, source, reason));
+        if !self
+            .signals
+            .iter()
+            .any(|s| s.code == code && s.source == source)
+        {
+            self.signals
+                .push(Signal::new(code, severity, source, reason));
         }
     }
 
@@ -54,7 +75,12 @@ impl Report {
             self.risk = "not_assessed";
             return;
         }
-        self.score = self.signals.iter().map(|s| s.severity).sum::<u32>().min(100);
+        self.score = self
+            .signals
+            .iter()
+            .map(|s| s.severity)
+            .sum::<u32>()
+            .min(100);
         self.risk = match self.score {
             0..=24 => "low_signal",
             25..=64 => "review",

@@ -1,6 +1,6 @@
-use serde_json::Value;
 #[cfg(not(windows))]
 use serde_json::json;
+use serde_json::Value;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::Read;
@@ -73,7 +73,9 @@ fn main() {
     } else if args.len() == 3 && args[1].to_str() == Some("inspect-fixture") {
         read_fixture(&args[2]).and_then(|fixture| evaluate(&fixture, timestamp))
     } else {
-        eprintln!("Usage: windows-posture audit --format json | windows-posture inspect-fixture <file>");
+        eprintln!(
+            "Usage: windows-posture audit --format json | windows-posture inspect-fixture <file>"
+        );
         std::process::exit(2);
     };
 

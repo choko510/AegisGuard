@@ -226,3 +226,24 @@ fn a_valid_json_object_without_final_newline_is_incomplete() {
     fs::write(&actual, b"{\"ruleset_version\":999,\"case_id\":\"benign-com\",\"rules\":[],\"findings\":[]}\n").unwrap();
     assert!(summarize(&a.join("manifest.json"), &actual).is_err());
 }
+
+#[test]
+fn complete_synthetic_chain_with_expected_refs_is_compared_not_called_malware() {
+    let temp = Temporary::new();
+    let a = create(&temp, "case", 42, "k2f-analog-chain");
+    let expected: Value = serde_json::from_slice(&fs::read(a.join("manifest.json")).unwrap()).unwrap();
+    let checks = expected["cases"][0]["expected"].as_array().unwrap();
+    let rules = checks.iter().filter(|e| e["outcome"] != "planned")
+        .map(|e| json!({"rule_id":e["rule_id"],"evaluable":true})).collect::<Vec<_>>();
+    let findings = checks.iter().filter(|e| e["outcome"] == "present")
+        .map(|e| json!({"rule_id":e["rule_id"],"event_refs":e["event_refs"]})).collect::<Vec<_>>();
+    let actual = temp.path().join("actual.jsonl");
+    let report = json!({"case_id":"k2f-analog-chain","ruleset_version":2,
+        "rules":rules,"findings":findings});
+    fs::write(&actual, format!("{report}\n")).unwrap();
+    let result = summarize(&a.join("manifest.json"), &actual).unwrap();
+    assert_eq!(result["coverage"]["passed"], 4);
+    assert_eq!(result["coverage"]["failed"], 0);
+    assert_eq!(result["coverage"]["planned"], 1);
+    assert_eq!(result["status"], "partial"); // planned means not fully implemented
+}

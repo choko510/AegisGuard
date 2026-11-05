@@ -1,0 +1,11 @@
+{
+  "secure_boot": {"status": "ok", "enabled": null},
+  "tpm": {"status": "ok", "present": false, "ready": true, "spec_2_0": true},
+  "device_guard": {
+    "status": "ok", "vbs_status": 0,
+    "running_services": [0, 2], "configured_services": [2]
+  },
+  "bitlocker": {
+    "status": "ok", "os_volume_count": 1, "protection": 1, "conversion": 0
+  }
+}

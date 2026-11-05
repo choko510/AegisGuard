@@ -11,6 +11,7 @@ mod app;
 mod data;
 mod fluent;
 mod fonts;
+mod live;
 mod png;
 mod status;
 mod theme;
@@ -29,6 +30,8 @@ struct Options {
     size: [f32; 2],
     scale: Option<f32>,
     open: Vec<PathBuf>,
+    /// Poll the service even in screenshot mode.
+    live: bool,
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -39,6 +42,7 @@ fn parse_args() -> Result<Options, String> {
         size: [1180.0, 760.0],
         scale: None,
         open: Vec::new(),
+        live: false,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -57,6 +61,7 @@ fn parse_args() -> Result<Options, String> {
                 }
             }
             "--open" => o.open.push(PathBuf::from(value()?)),
+            "--live" => o.live = true,
             "--screenshot" => o.screenshot = Some(PathBuf::from(value()?)),
             "--size" => {
                 let v = value()?;
@@ -87,6 +92,7 @@ struct ScreenshotApp {
     requested: bool,
     done: Arc<AtomicBool>,
     scale: Option<f32>,
+    wait_live: bool,
 }
 
 impl eframe::App for ScreenshotApp {
@@ -99,7 +105,12 @@ impl eframe::App for ScreenshotApp {
         self.frames += 1;
         if self.done.load(Ordering::SeqCst) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        } else if self.frames >= 5 && !self.requested {
+        } else if self.frames >= 5
+            && !self.requested
+            && (!self.wait_live
+                || self.inner.live.connection != live::Connection::Unknown
+                || self.frames > 600)
+        {
             self.requested = true;
             let out = self.out.clone();
             let done = self.done.clone();
@@ -138,7 +149,12 @@ fn main() -> eframe::Result {
             .with_min_inner_size([520.0, 420.0]),
         ..Default::default()
     };
-    let mut app = AegisApp::new(options.page, options.theme);
+    // Screenshots are deterministic: no live service polling.
+    let mut app = if options.screenshot.is_some() && !options.live {
+        AegisApp::new(options.page, options.theme)
+    } else {
+        AegisApp::new(options.page, options.theme).with_live()
+    };
     // Files named on the command line are loaded before the first frame
     // (bounded and cancellable like drag and drop).
     app.load_now(&options.open);
@@ -161,6 +177,7 @@ fn main() -> eframe::Result {
                     requested: false,
                     done: Arc::new(AtomicBool::new(false)),
                     scale: options.scale,
+                    wait_live: options.live,
                 }) as Box<dyn eframe::App>,
                 None => {
                     if let Some(scale) = options.scale {

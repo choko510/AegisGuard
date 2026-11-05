@@ -12,3 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 serde_json = "=1.0.154"
+
+# Isolated from the parent AegisGuard workspace; keeps its own Cargo.lock.
+[workspace]

@@ -1,0 +1,12 @@
+{
+  "edition": "pro",
+  "secure_boot": {"status": "ok", "enabled": true},
+  "tpm": {"status": "ok", "present": true, "ready": true, "spec_2_0": true},
+  "device_guard": {
+    "status": "ok", "vbs_status": 2,
+    "running_services": [2], "configured_services": [2]
+  },
+  "bitlocker": {
+    "status": "ok", "os_volume_count": 1, "protection": 1, "conversion": 1
+  }
+}

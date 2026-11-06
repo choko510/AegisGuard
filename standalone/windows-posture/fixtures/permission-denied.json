@@ -1,0 +1,7 @@
+{
+  "edition": "home",
+  "secure_boot": {"status": "permission_denied"},
+  "tpm": {"status": "permission_denied"},
+  "device_guard": {"status": "permission_denied"},
+  "bitlocker": {"status": "permission_denied"}
+}

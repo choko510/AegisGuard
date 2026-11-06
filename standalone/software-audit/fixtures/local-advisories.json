@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "source_checked_at_unix_ms": 1793900000000,
+  "advisories": [
+    {
+      "id": "CVE-2026-12345",
+      "vendor": "Example Labs",
+      "product": "Example Widget",
+      "version_ranges": [
+        {
+          "start_inclusive": "1.0",
+          "end_exclusive": "1.10"
+        }
+      ],
+      "unaffected_versions": [],
+      "architectures": [
+        "x64"
+      ],
+      "editions": [
+        "Pro"
+      ],
+      "source_url": "https://example.org/advisory/example"
+    }
+  ]
+}

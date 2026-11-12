@@ -1,5 +1,8 @@
 # AegisGuard 実装ロードマップ（調査結果からの開発計画）
 
+> **2026-11-12 新規設計（P11）**：情報窃盗型マルウェアが探索するファイルへのアクセスを安全なデコイで観測する Canary File / Honeyfile 検出について、[CANARY_FILE_DETECTION.md](CANARY_FILE_DETECTION.md) に Microsoft の監査仕様、既存サービスとの統合境界、SACL/ポリシーの同意・復元、ログ欠損、検出ルール、実装PR分割と実機検証ゲートを定義した。**現段階は設計のみで、機能は未実装。**
+
+
 > **2026-11-05追補**: 最新調査対象は [main 5eea9b7](https://github.com/choko510/AegisGuard/tree/5eea9b7142de677a1939ae4c4f0760701cf24cb0)。**第0〜7章は当初の意思決定履歴、第8章がマージ済み機能の実績、第9〜15章が今後の実装優先順位**。実機の性能・誤検知・復旧試験は未実施であり、CI成功を本番安全性と混同しない。
 
 > 作成日: 2026-11-05（JST） / 比較対象 `main`: [83fcf0d150e8d760baff5f971c106deb09c1f8e4](https://github.com/choko510/AegisGuard/tree/83fcf0d150e8d760baff5f971c106deb09c1f8e4)  
